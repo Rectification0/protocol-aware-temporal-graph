@@ -175,6 +175,26 @@ minimal (untrained/randomly initialized) — these parameters tune the
 *integration*, not detection accuracy. See `docs/operational-runbook.md`
 if you're swapping in a trained model.
 
+## Synthetic traffic simulator (`src/t_gnn/data/simulate_traffic.py`, extends tasks.md 7.3)
+
+CLI flags for `python -m t_gnn.data.simulate_traffic`:
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--output-dir` | required | Writes `<dir>/staged/` (NDJSON shards) and `<dir>/redteam.txt` |
+| `--num-users` / `--num-machines` | 200 / 50 | Size of the synthetic population |
+| `--days` | 7.0 | Duration of the simulated traffic window |
+| `--events-per-user-per-day` | 3.0 | Background authentication volume per user |
+| `--num-lateral-pivots` / `--num-admin-share-escalations` | 3 / 3 | Injected instances of each seed motif |
+| `--num-anomalies` | 3 | Injected "low and slow" anomalies (FR1.5 z-score target) |
+| `--epoch-start` | matches `stage_lanl.py`'s `DEFAULT_EPOCH_START` | Anchors the simulated relative timeline to a real epoch |
+| `--shard-size` | matches `stage_lanl.py`'s `DEFAULT_SHARD_SIZE` | Output NDJSON shard size |
+| `--seed` | 42 | Same seed always reproduces identical traffic |
+
+See `docs/operational-runbook.md`'s "Generating simulated traffic for
+testing" for the intended workflow (feed the output straight into
+`pilot.py`).
+
 ## Environment variables (`.env.example`)
 
 | Variable | Used by |

@@ -31,6 +31,7 @@ traffic remains an operational step outside what this repo can perform.
 - `src/t_gnn/tgnn.py` -- Phase 5: the PyTorch Geometric forward pass over the live Active Graph Store, with the FR1.5 deviation signal wired in as an input feature and motif completions (FR3.4) as a fast-path inference trigger.
 - `src/t_gnn/audit.py`, `src/t_gnn/metrics.py` -- Phase 6: NFR5 audit logging for prune/motif-reset events, and a metrics collector for active graph size, prune/motif-hit/motif-reset rates, epsilon history, and inference latency.
 - `src/t_gnn/pilot.py` -- Phase 7: the pilot-evaluation harness (false-positive/negative rates for both detection paths against labeled ground truth) and its `python -m t_gnn.pilot` CLI.
+- `src/t_gnn/data/simulate_traffic.py` -- generates synthetic labeled traffic (background noise + injected motif/anomaly attacks) at a configurable scale, for exercising `pilot.py`/the detection pipeline locally beyond the tiny committed fixture -- still not a substitute for a real pilot against real enterprise traffic.
 - `src/t_gnn/ingestion/sysmon_adapter.py`, `src/t_gnn/data/stage_lanl.py` -- the two reference ingestion adapters (Sysmon and offline LANL replay).
 
 ## Local dev environment

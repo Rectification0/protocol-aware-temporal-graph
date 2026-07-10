@@ -137,9 +137,12 @@ def evaluate_motif_detection(
     time_tolerance_seconds: float = 14400.0,
 ) -> DetectionMetrics:
     """FR3.4's motif-completion alert vs. ground truth: a completion
-    counts as detecting a label if the label's source or destination
-    computer matches the completion's `chain_key` (motifs.py -- the
-    entity the whole match pivots on) within `time_tolerance_seconds`."""
+    counts as detecting a label if the completion's `chain_key` (motifs.py
+    -- the entity the whole match pivots on) equals the label's source or
+    destination computer (the `lateral_pivot` shape, whose chain key is a
+    Machine) *or* the label's user (the `admin_share_escalation` shape,
+    whose chain key is the service-account User) within
+    `time_tolerance_seconds`."""
     labels = list(labels)
     completions = list(completions)
 
@@ -148,7 +151,11 @@ def evaluate_motif_detection(
     for event in completions:
         hit = False
         for i, label in enumerate(labels):
-            candidates = {f"Machine:{label.source_computer}", f"Machine:{label.destination_computer}"}
+            candidates = {
+                f"Machine:{label.source_computer}",
+                f"Machine:{label.destination_computer}",
+                f"User:{label.user}",
+            }
             if event.chain_key in candidates and abs(event.completed_at - label.t) <= time_tolerance_seconds:
                 matched_labels.add(i)
                 hit = True

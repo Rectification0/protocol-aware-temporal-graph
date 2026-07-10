@@ -165,10 +165,41 @@ enqueues, so `run_once()` never blocks on Neo4j latency. Operator actions:
    wrapping it in a `BufferedColdStorageWriter` if this becomes a recurring
    issue.
 
+## Generating simulated traffic for testing
+
+Before real labeled enterprise traffic is available, `src/t_gnn/data/simulate_traffic.py`
+generates synthetic labeled traffic at whatever scale you need to exercise
+the pipeline/pilot harness locally:
+
+```bash
+python -m t_gnn.data.simulate_traffic \
+    --output-dir data/lanl/simulated \
+    --num-users 200 --num-machines 50 --days 7 \
+    [--events-per-user-per-day 3.0] \
+    [--num-lateral-pivots 3] [--num-admin-share-escalations 3] [--num-anomalies 3] \
+    [--seed 42]
+```
+
+This writes `data/lanl/simulated/staged/` (drop-in `--staged-dir` for the
+pilot command below) and `data/lanl/simulated/redteam.txt` (drop-in
+`--redteam`). Background traffic is benign `User`->`Machine` authentication
+noise; the injected attacks are verifiably detectable instances of both
+seed motifs plus a "low and slow" anomaly (see `src/t_gnn/data/simulate_traffic.py`'s
+module docstring for exactly what each one does and why it can't collide
+with the background noise). Same `--seed` always reproduces the same
+traffic — vary it to test against a different random scenario.
+
+**This is still synthetic, not real enterprise traffic** — it validates
+the pipeline's mechanics at a meaningful scale, not detection accuracy
+against real attacker behavior. Treat a pilot run against simulated
+traffic as a regression/smoke check, not evidence for an actual rollout
+decision (see the caveat below).
+
 ## Running a pilot evaluation
 
 `src/t_gnn/pilot.py` (tasks.md 7.3) computes false-positive/negative rates
-for both detection paths against labeled ground truth:
+for both detection paths against labeled ground truth — either the
+simulated traffic above, or real staged/labeled data once available:
 
 ```bash
 python -m t_gnn.pilot \

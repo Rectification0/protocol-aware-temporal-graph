@@ -64,3 +64,14 @@ exercise `src/t_gnn/pilot.py`'s evaluation harness end-to-end -- a smoke
 test of the mechanism, not a validated detection result (the fixture is
 too small for either seed motif to structurally match, and its one labeled
 entity has no prior baseline history for a z-score at all).
+
+## Need more than the tiny fixture, but don't have real data yet?
+
+`src/t_gnn/data/simulate_traffic.py` (`python -m t_gnn.data.simulate_traffic`)
+generates synthetic traffic + `redteam.txt`-format labels at whatever
+scale you configure, with verifiably-detectable injected instances of both
+seed motifs and a low-and-slow anomaly -- see
+`docs/operational-runbook.md`'s "Generating simulated traffic for testing".
+It writes staged NDJSON directly (no `auth.txt` round-trip needed) rather
+than extending this directory's raw/staged split. Still synthetic, not a
+substitute for the real dataset or a real pilot.
