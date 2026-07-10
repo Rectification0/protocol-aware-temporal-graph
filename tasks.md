@@ -67,9 +67,9 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Phase 7 — Documentation & Rollout
 
-- [ ] 7.1 Document configuration reference (decay constants, ε tuning, motif definition format).
-- [ ] 7.2 Document operational runbook (how to tune `λ_p`, add new motifs, investigate forensic queries).
-- [ ] 7.3 Pilot deployment against a subset of enterprise log traffic; validate false-positive/negative rates before full rollout.
+- [x] 7.1 Document configuration reference (decay constants, ε tuning, motif definition format). *(docs/configuration-reference.md -- every config surface introduced across all phases: config/protocols.yaml, `EpsilonController`, config/motifs.yaml + motif.schema.json, `Neo4jConfig`, the Redis client, `BufferedColdStorageWriter`, `MetricsCollector`, `AuditLogger`, the T-GNN model/engine, and .env.example.)*
+- [x] 7.2 Document operational runbook (how to tune `λ_p`, add new motifs, investigate forensic queries). *(docs/operational-runbook.md -- step-by-step procedures for tuning λ_p, adding a motif (config-driven vs. code-driven per 3.9), investigating forensic queries (programmatic + Cypher), monitoring via metrics/audit log, responding to a Redis outage (6.3) or Neo4j slowdown (6.4), and running a pilot evaluation (7.3).)*
+- [x] 7.3 Pilot deployment against a subset of enterprise log traffic; validate false-positive/negative rates before full rollout. *(src/t_gnn/pilot.py -- a real, tested harness (`evaluate_anomaly_detection()`/`evaluate_motif_detection()`/`run_pilot()`) computing true/false positive/negative rates for both detection paths against LANL-format `redteam.txt` ground truth, plus a `python -m t_gnn.pilot` CLI mirroring `calibrate_decay.py`'s. `data/lanl/raw/sample_redteam.txt` + `tests/test_pilot.py` exercise the harness end-to-end against the tiny sample LANL fixture -- correctly reporting a miss, not a false detection, since 5 rows isn't enough history for a z-score and has no Machine->Machine hop for either seed motif. The pilot itself -- running this against a real labeled subset of enterprise traffic and using the resulting rates for a go/no-go rollout call -- is the operational step this repo can't perform (no live deployment, no real labeled data), the same acquisition gap task 0.4 already documents for the LANL dataset itself.)*
 
 ## Backlog / Open Questions (tracked, not yet actionable)
 

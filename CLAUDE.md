@@ -16,8 +16,9 @@ the source of truth and should be read before implementing any new phase:
 
 Phase 0 (Foundations), Phase 1 (Protocol-Aware Asymmetric Time-Decay),
 Phase 2 (Dynamic Graph Pruning), Phase 3 (Stateful Motif Caching), Phase 4
-(Cold Storage & Forensics), Phase 5 (T-GNN Integration), and Phase 6
-(Observability & Hardening) are implemented so far. Phase 1 is
+(Cold Storage & Forensics), Phase 5 (T-GNN Integration), Phase 6
+(Observability & Hardening), and Phase 7 (Documentation & Rollout) are
+implemented so far — this is every phase in `tasks.md`. Phase 1 is
 pure-Python/staging (see the Architecture section for what each module
 stands in for and why). Phase 2 is a mix: the Active Graph Store and
 Pruning Watcher are framework-agnostic Python (no live Flink job), but its
@@ -43,11 +44,18 @@ framework-agnostic in the same sense Phase 1's decay/baseline logic is —
 dashboard/log-shipping pipeline would read from, since no such pipeline is
 provisioned in docker-compose.yml — but its hardening changes to
 `MotifEngine` (6.3) and its `BufferedColdStorageWriter` (6.4) are real,
-load-bearing code paths, not staged.
+load-bearing code paths, not staged. Phase 7's two docs (7.1/7.2) are real,
+complete reference material; its pilot harness (7.3, `src/t_gnn/pilot.py`)
+is a genuinely working, tested tool, but per that task's own nature the
+*pilot itself* — running it against real labeled enterprise traffic and
+using the result for a go/no-go rollout call — is an operational step no
+phase in this repo can actually perform, the same acquisition gap task
+0.4 documents for the underlying LANL dataset.
 `docker-compose.yml`'s Flink/Redis/Neo4j stack is running locally (brought
 up ahead of schedule, before Phase 2 started, at the developer's request)
-— see "Local dev database" below. Later phases (documentation/rollout) do
-not have code yet.
+— see "Local dev database" below. Every phase in `tasks.md` now has code
+(with 7.3's operational caveat above); further work is enhancement/
+extension of what exists (e.g. the Backlog items), not a new phase.
 
 ## End-of-phase checklist
 
@@ -87,6 +95,7 @@ pytest tests/test_schema.py::test_round_trip_json   # run one test
 python scripts/init_postgres.py          # idempotent: create the t_gnn_dev database
 python -m t_gnn.data.stage_lanl --input <auth.txt.gz> --output <dir>   # stage LANL dataset
 python -m t_gnn.data.calibrate_decay --staged-dir <dir> [--output report.json]   # suggest lambda_p per protocol from staged edges
+python -m t_gnn.pilot --staged-dir <dir> --redteam <redteam.txt> [--z-threshold 3.0] [--output report.json]   # false-positive/negative rates vs. labeled ground truth
 docker compose up -d                     # bring up Flink/Redis/Neo4j (needed for the Neo4j and Redis integration tests)
 ```
 
@@ -211,3 +220,8 @@ by the rest of the suite:
 - `src/t_gnn/metrics.py` (`MetricsCollector`, `RollingRateCounter`, `EpsilonReading`, `InferenceLatencyReading`, `MetricsSnapshot`) — tasks.md 6.2: active graph size is read live from `ActiveGraphStore.__len__` (not tracked as a series); prune rate / motif hit rate / motif reset rate are `RollingRateCounter`s fed by subscribing to `PruneEventBus` / `MotifAlertBus` / `MotifResetBus` respectively — "hit" is defined as a `MotifCompletionEvent` (a full match, i.e. a detection) rather than every intermediate-stage advance, the more externally meaningful of the two readings design.md's own "cache hit" language could map to. Epsilon-history and inference-latency series come from `observe_pruning_pass()`/`observe_inference_pass()`, which the caller invokes explicitly alongside `PruningWatcher.run_once()`/`TGNNInferenceEngine` passes — no hook was added to either of those classes, since both already return everything `MetricsCollector` needs. `snapshot()` is the single dashboard-ready read of all five quantities.
 - `src/t_gnn/motif_engine.py`'s Redis-outage graceful degradation (tasks.md 6.3) and `src/t_gnn/cold_storage.py`'s `BufferedColdStorageWriter` (tasks.md 6.4) are described in their own bullets above (Phase 3's and Phase 2's sections respectively) — both are Phase 6 additions to earlier-phase modules, not new modules of their own, so they're documented alongside the code they modify rather than repeated here.
 - `tests/test_chaos.py` (tasks.md 6.5) is one test per row of design.md §5's Failure Modes table: a 1000-edge ingest spike forcing epsilon toward `epsilon_max` under size pressure then relaxing once calm (Flink backpressure's proxy, since no real Flink job exists to generate literal backpressure); a simulated Redis outage (`redis.exceptions.ConnectionError`) showing `MotifEngine` disables cleanly while `BaselineStore`/`DecayEngine` proceed unaffected on the same edges; intermittent Neo4j latency spikes showing `PruningWatcher.run_once()` never stalls and every write eventually lands via `BufferedColdStorageWriter`; and a misconfigured `λ_p` producing a prune-rate spike fully visible in `AuditLogger`'s records, corrected via `ProtocolDecayRegistry.reload()` with no redeploy.
+
+**Phase 7 is documentation plus one tool, not a new pipeline stage:**
+
+- `docs/configuration-reference.md` (tasks.md 7.1) and `docs/operational-runbook.md` (tasks.md 7.2) are real, complete reference/procedure docs covering every config surface and operational workflow introduced across Phases 0-6 — not placeholders. Per the End-of-phase checklist above, keep both current whenever a future phase adds or changes a config surface or operational procedure; they're "non-planning docs" in the same sense `README.md` is, just organized by topic instead of by project overview.
+- `src/t_gnn/pilot.py` (`RedTeamLabel`, `load_redteam_labels()`, `evaluate_anomaly_detection()`, `evaluate_motif_detection()`, `run_pilot()`, plus a `python -m t_gnn.pilot` CLI mirroring `calibrate_decay.py`'s) — tasks.md 7.3: a real, tested harness computing true/false positive/negative rates for both detection paths (FR1.5 deviation signals vs. FR3.4 motif completions) against LANL `redteam.txt`-format ground truth. `data/lanl/raw/sample_redteam.txt` is the matching tiny synthetic label fixture for `data/lanl/raw/sample_auth.txt.gz` (same relationship task 0.4's sample fixture already has to the real dataset); `tests/test_pilot.py`'s end-to-end smoke test asserts the *correct* miss (a false negative, not a fabricated detection) given that fixture's tiny size — same honesty standard `calibrate_decay.py`'s own smoke test holds itself to. Running an actual pilot against real labeled enterprise traffic, and using the result for a rollout decision, is the operational step this module's own docstring says the repo can't perform.
