@@ -1,41 +1,41 @@
 # t_gnn
 
-Protocol-Aware Asymmetric Decay and Stateful Motif Pruning in CTDGs.
+Protocol-Aware Asymmetric Decay and Stateful Motif Pruning in CTDGs: a
+real-time threat-detection system design for enterprise networks, built on
+Temporal GNNs over Continuous-Time Dynamic Graphs.
+
 See `functionality.txt` (blueprint), `specs.md` (requirements), `design.md`
-(architecture), and `tasks.md` (implementation plan / status).
+(architecture), and `tasks.md` (implementation plan / status) for the full
+design. `CLAUDE.md` has the detailed module-by-module architecture notes.
 
-## Phase 0 layout
+## Status
 
-- `config/schema/edge.schema.json` -- shared edge data contract (tasks.md 0.2).
-- `config/protocols.yaml` -- protocol set + placeholder decay constants (0.3).
-- `src/t_gnn/schema.py` -- `Edge` dataclass implementing the contract.
-- `src/t_gnn/protocol_registry.py` -- loader for `config/protocols.yaml`.
-- `src/t_gnn/ingestion/sysmon_adapter.py` -- Sysmon/Security event -> typed edge (0.5).
-- `src/t_gnn/data/stage_lanl.py` -- LANL dataset staging pipeline (0.4); see `data/lanl/README.md`.
-- `docker-compose.yml` -- target dev infra (Flink, Redis, Neo4j) -- **not currently used**, see below.
+Phases 0-3 are implemented: Foundations (edge/protocol schema + ingestion
+adapters), Protocol-Aware Time-Decay (FR1), Dynamic Graph Pruning (FR2),
+and Stateful Motif Caching (FR3). See `tasks.md` for the per-task checklist.
 
-## Local dev database
+- `config/schema/edge.schema.json`, `config/schema/motif.schema.json` -- the edge and motif definition contracts.
+- `config/protocols.yaml`, `config/motifs.yaml` -- protocol decay constants and the seed motif library.
+- `src/t_gnn/schema.py`, `src/t_gnn/protocol_registry.py` -- the `Edge` contract and its decay-constant registry.
+- `src/t_gnn/decay.py`, `src/t_gnn/baseline.py`, `src/t_gnn/streaming.py`, `src/t_gnn/data/calibrate_decay.py` -- Phase 1: per-protocol decay, EWMA baseline/deviation, and LANL-based calibration.
+- `src/t_gnn/graph_store.py`, `src/t_gnn/pruning.py`, `src/t_gnn/cold_storage.py` -- Phase 2: the Active Graph Store, the Pruning Watcher, and the Neo4j cold-storage write path.
+- `src/t_gnn/motifs.py`, `src/t_gnn/motif_engine.py` -- Phase 3: motif definitions and the Redis-backed delta-update/reset-on-prune engine.
+- `src/t_gnn/ingestion/sysmon_adapter.py`, `src/t_gnn/data/stage_lanl.py` -- the two reference ingestion adapters (Sysmon and offline LANL replay).
 
-Local development is currently pointed at a Postgres instance the developer
-already runs locally (`localhost:5432`) instead of standing up
-`docker-compose.yml`. Postgres is a stand-in for whatever a given task
-would otherwise persist to -- tables are created only as specific tasks
-need them (e.g. Phase 4 cold storage), not preemptively.
-
-Setup:
+## Local dev environment
 
 ```bash
 cp .env.example .env       # then edit .env with your local credentials
 pip install -e ".[dev]"
-python scripts/init_postgres.py   # idempotent: creates the t_gnn_dev database if missing
+docker compose up -d       # Flink UI :8081, Neo4j :7474/7687, Redis :6379
+python scripts/init_postgres.py   # optional: creates the t_gnn_dev Postgres database
 ```
 
-`t_gnn.db.get_connection()` reads connection settings from the environment
-(`.env` is auto-loaded; real credentials are never committed -- `.env` is
-gitignored, only `.env.example` with placeholders is tracked).
-
-Once Flink/Redis/Neo4j-backed phases are actually implemented, bring up
-`docker-compose.yml` instead (`docker compose up -d`) and migrate off Postgres.
+`docker-compose.yml` brings up the Flink/Redis/Neo4j stack that Phase 2's
+cold-storage writes and Phase 3's motif state actually run against. A
+separate local Postgres instance (`t_gnn/db.py`) remains available for any
+persistence need that doesn't map to one of those three systems; see
+`CLAUDE.md`'s "Local dev database" section for the current split.
 
 ## Running tests
 
@@ -43,3 +43,6 @@ Once Flink/Redis/Neo4j-backed phases are actually implemented, bring up
 pip install -e ".[dev]"
 pytest
 ```
+
+Tests that need the live Neo4j or Redis instance `skip` (rather than fail)
+if `docker compose up -d` hasn't been run.

@@ -41,10 +41,25 @@ When every checkbox in a `tasks.md` phase is flipped to done, before moving on:
    extend the Architecture section with whatever new load-bearing
    abstractions/conventions that phase introduced, and add any new commands.
    Keep it a living doc, not a Phase-0 snapshot.
-2. **Re-check `.gitignore`.** Scan for anything the phase's work generates
+2. **Update `README.md` and any other non-planning docs** that describe
+   current implementation status, layout, or setup/dev-environment
+   instructions (e.g. a `docs/` folder, if one shows up later). These drift
+   stale independently of this file — updating CLAUDE.md does not cover
+   them. This explicitly excludes `functionality.txt`, `specs.md`,
+   `design.md`, and `tasks.md`: the first three are the fixed
+   planning/source-of-truth docs (requirements/architecture as designed,
+   not implementation snapshots to rewrite as phases land), and `tasks.md`
+   already has its own status-tracking mechanism (flip its checkboxes as
+   tasks complete, per the Project section above) rather than needing prose
+   updates here.
+3. **Re-check `.gitignore`.** Scan for anything the phase's work generates
    that isn't already covered — new build/cache artifacts (e.g. a new
    toolchain's equivalent of `*.egg-info/`), new local data/output
    directories, new env/credential files — and add entries before committing.
+4. **Include all of the above in the phase's commit(s).** These doc/config
+   updates land in the same commit(s) as the phase's code, not a follow-up
+   commit — so `git log` never shows a phase "done" with its docs still
+   pointing at the previous phase's state.
 
 ## Commands
 
