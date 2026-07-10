@@ -10,19 +10,21 @@ design. `CLAUDE.md` has the detailed module-by-module architecture notes.
 
 ## Status
 
-Phases 0-5 are implemented: Foundations (edge/protocol schema + ingestion
+Phases 0-6 are implemented: Foundations (edge/protocol schema + ingestion
 adapters), Protocol-Aware Time-Decay (FR1), Dynamic Graph Pruning (FR2),
-Stateful Motif Caching (FR3), Cold Storage & Forensics (FR4), and T-GNN
-Integration. See `tasks.md` for the per-task checklist.
+Stateful Motif Caching (FR3), Cold Storage & Forensics (FR4), T-GNN
+Integration, and Observability & Hardening. See `tasks.md` for the
+per-task checklist.
 
 - `config/schema/edge.schema.json`, `config/schema/motif.schema.json` -- the edge and motif definition contracts.
 - `config/protocols.yaml`, `config/motifs.yaml` -- protocol decay constants and the seed motif library.
 - `src/t_gnn/schema.py`, `src/t_gnn/protocol_registry.py` -- the `Edge` contract and its decay-constant registry.
 - `src/t_gnn/decay.py`, `src/t_gnn/baseline.py`, `src/t_gnn/streaming.py`, `src/t_gnn/data/calibrate_decay.py` -- Phase 1: per-protocol decay, EWMA baseline/deviation, and LANL-based calibration.
-- `src/t_gnn/graph_store.py`, `src/t_gnn/pruning.py`, `src/t_gnn/cold_storage.py` -- Phase 2: the Active Graph Store, the Pruning Watcher, and the Neo4j cold-storage write path.
-- `src/t_gnn/motifs.py`, `src/t_gnn/motif_engine.py` -- Phase 3: motif definitions and the Redis-backed delta-update/reset-on-prune engine.
+- `src/t_gnn/graph_store.py`, `src/t_gnn/pruning.py`, `src/t_gnn/cold_storage.py` -- Phase 2: the Active Graph Store, the Pruning Watcher, and the Neo4j cold-storage write path (plus Phase 6's `BufferedColdStorageWriter`).
+- `src/t_gnn/motifs.py`, `src/t_gnn/motif_engine.py` -- Phase 3: motif definitions and the Redis-backed delta-update/reset-on-prune engine (plus Phase 6's Redis-outage graceful degradation and `MotifResetEvent`/`MotifResetBus`).
 - `src/t_gnn/forensics.py` -- Phase 4: the forensic query API over Phase 2's Neo4j cold storage ("reconstruct activity around entity X in time window Y", point lookup by edge id).
 - `src/t_gnn/tgnn.py` -- Phase 5: the PyTorch Geometric forward pass over the live Active Graph Store, with the FR1.5 deviation signal wired in as an input feature and motif completions (FR3.4) as a fast-path inference trigger.
+- `src/t_gnn/audit.py`, `src/t_gnn/metrics.py` -- Phase 6: NFR5 audit logging for prune/motif-reset events, and a metrics collector for active graph size, prune/motif-hit/motif-reset rates, epsilon history, and inference latency.
 - `src/t_gnn/ingestion/sysmon_adapter.py`, `src/t_gnn/data/stage_lanl.py` -- the two reference ingestion adapters (Sysmon and offline LANL replay).
 
 ## Local dev environment

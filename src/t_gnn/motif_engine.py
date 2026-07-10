@@ -43,6 +43,20 @@ always applies `EXPIRE` for `window_seconds`, and `InMemoryMotifStateStore`
 (used in unit tests without a live Redis) tracks the same expiry against an
 injectable clock -- so a missed/lost prune event can never leave a stale
 partial match alive indefinitely, independent of 3.6's explicit path.
+
+**Graceful degradation on Redis outage (tasks.md 6.3, NFR4, design.md
+§5's "Redis unavailable" failure mode):** every `state_store` call inside
+`MotifEngine` goes through `_state_get`/`_state_set`/`_state_delete`/
+`_state_containing_edge`, which catch `redis.exceptions.RedisError` rather
+than letting it propagate. On failure, `self.available` flips to `False`
+(logged once, not per edge, to avoid log spam under a sustained outage) and
+the call site treats it as "no match" -- `on_edge()`/`on_prune()` simply
+stop finding or creating motif state until Redis comes back, at which
+point the next successful call flips `self.available` back to `True` and
+detection silently resumes. Nothing here touches `BaselineStore`/
+`DecayEngine`/`TGNNInferenceEngine`, which have no Redis dependency in the
+first place -- FR1.5 anomaly detection is unaffected by construction, not
+because of any special-casing in this module.
 """
 
 from __future__ import annotations
@@ -53,6 +67,8 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Protocol
+
+from redis.exceptions import RedisError
 
 from t_gnn.motifs import MotifDefinition
 from t_gnn.pruning import PruneEventBus, PrunedEdgeEvent
@@ -247,6 +263,37 @@ class MotifAlertBus:
             callback(event)
 
 
+@dataclass
+class MotifResetEvent:
+    """tasks.md 3.6/3.3, and 6.1/6.2's audit-log and metrics consumers:
+    published whenever a partial match is reset because one of its
+    contributing edges was pruned (FR3.3)."""
+
+    motif_name: str
+    chain_key: str
+    triggering_edge_id: str
+    matched_edges: list[str]
+    reset_at: float
+
+
+class MotifResetBus:
+    """In-process pub/sub for motif-reset events -- the same standing-in
+    role `MotifAlertBus`/`PruneEventBus` play. Introduced in 6.1/6.2
+    because reset events now have two real subscribers (the audit logger
+    and the metrics collector), not because every event needs its own bus
+    on principle."""
+
+    def __init__(self) -> None:
+        self._subscribers: list[Callable[[MotifResetEvent], None]] = []
+
+    def subscribe(self, callback: Callable[[MotifResetEvent], None]) -> None:
+        self._subscribers.append(callback)
+
+    def publish(self, event: MotifResetEvent) -> None:
+        for callback in self._subscribers:
+            callback(event)
+
+
 class MotifEngine:
     """Generic motif cache + delta-update engine, generalized over any
     `MotifDefinition` (FR3.1's "SHALL generalize to any operator-defined
@@ -258,10 +305,13 @@ class MotifEngine:
         state_store: MotifStateStore,
         alert_bus: Optional[MotifAlertBus] = None,
         prune_event_bus: Optional[PruneEventBus] = None,
+        reset_bus: Optional[MotifResetBus] = None,
     ) -> None:
         self.definitions = definitions
         self.state_store = state_store
         self.alert_bus = alert_bus or MotifAlertBus()
+        self.reset_bus = reset_bus or MotifResetBus()
+        self.available = True
         if prune_event_bus is not None:
             prune_event_bus.subscribe(self.on_prune)
 
@@ -281,7 +331,7 @@ class MotifEngine:
         key = step0.candidate_key(edge)
         if key is None:
             return
-        if self.state_store.get(definition.name, key) is not None:
+        if self._state_get(definition.name, key) is not None:
             return  # don't clobber an in-progress chain at this key
         if definition.final_stage == 1:
             # A single-step "motif" completes immediately -- not used by the
@@ -303,7 +353,7 @@ class MotifEngine:
             last_edge_ts=edge.t_e,
             matched_edges=[edge.edge_id],
         )
-        self.state_store.set(state, ttl_seconds=definition.window_seconds)
+        self._state_set(state, ttl_seconds=definition.window_seconds)
 
     def _try_advance(self, definition: MotifDefinition, edge: Edge) -> Optional[MotifCompletionEvent]:
         for stage in range(1, definition.final_stage):
@@ -313,7 +363,7 @@ class MotifEngine:
             key = step.candidate_key(edge)
             if key is None:
                 continue
-            state = self.state_store.get(definition.name, key)
+            state = self._state_get(definition.name, key)
             if state is None or state.stage != stage:
                 continue
             if edge.t_e < state.last_edge_ts:
@@ -323,13 +373,13 @@ class MotifEngine:
                     "motif %s candidate %s exceeded its %.0fs window; dropping stale partial match",
                     definition.name, key, definition.window_seconds,
                 )
-                self.state_store.delete(definition.name, key)
+                self._state_delete(definition.name, key)
                 continue
 
             new_stage = stage + 1
             matched_edges = state.matched_edges + [edge.edge_id]
             if new_stage >= definition.final_stage:
-                self.state_store.delete(definition.name, key)
+                self._state_delete(definition.name, key)
                 event = MotifCompletionEvent(
                     motif_name=definition.name,
                     chain_key=key,
@@ -347,16 +397,76 @@ class MotifEngine:
                 last_edge_ts=edge.t_e,
                 matched_edges=matched_edges,
             )
-            self.state_store.set(advanced, ttl_seconds=definition.window_seconds)
+            self._state_set(advanced, ttl_seconds=definition.window_seconds)
             return None
         return None
 
     def on_prune(self, event: PrunedEdgeEvent) -> None:
         """FR3.3/3.6: reset any partial motif match that depended on an edge
         just severed from active memory, before it could complete."""
-        for state in self.state_store.states_containing_edge(event.edge.edge_id):
-            self.state_store.delete(state.motif_name, state.chain_key)
+        for state in self._state_containing_edge(event.edge.edge_id):
+            self._state_delete(state.motif_name, state.chain_key)
             logger.info(
                 "motif %s candidate %s reset: contributing edge %s was pruned",
                 state.motif_name, state.chain_key, event.edge.edge_id,
             )
+            self.reset_bus.publish(
+                MotifResetEvent(
+                    motif_name=state.motif_name,
+                    chain_key=state.chain_key,
+                    triggering_edge_id=event.edge.edge_id,
+                    matched_edges=state.matched_edges,
+                    reset_at=event.pruned_at,
+                )
+            )
+
+    # --- 6.3: Redis-outage graceful degradation -----------------------------
+
+    def _mark_degraded(self) -> None:
+        if self.available:
+            logger.error(
+                "motif state store unreachable -- motif detection degraded "
+                "(disabled, best-effort) until it recovers; FR1.5 anomaly "
+                "detection is unaffected",
+                exc_info=True,
+            )
+        self.available = False
+
+    def _mark_recovered(self) -> None:
+        if not self.available:
+            logger.info("motif state store reachable again -- motif detection resumed")
+        self.available = True
+
+    def _state_get(self, motif_name: str, chain_key: str) -> Optional[MotifState]:
+        try:
+            result = self.state_store.get(motif_name, chain_key)
+        except RedisError:
+            self._mark_degraded()
+            return None
+        self._mark_recovered()
+        return result
+
+    def _state_set(self, state: MotifState, ttl_seconds: float) -> None:
+        try:
+            self.state_store.set(state, ttl_seconds)
+        except RedisError:
+            self._mark_degraded()
+            return
+        self._mark_recovered()
+
+    def _state_delete(self, motif_name: str, chain_key: str) -> None:
+        try:
+            self.state_store.delete(motif_name, chain_key)
+        except RedisError:
+            self._mark_degraded()
+            return
+        self._mark_recovered()
+
+    def _state_containing_edge(self, edge_id: str) -> list[MotifState]:
+        try:
+            result = self.state_store.states_containing_edge(edge_id)
+        except RedisError:
+            self._mark_degraded()
+            return []
+        self._mark_recovered()
+        return result

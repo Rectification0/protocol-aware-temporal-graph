@@ -1,9 +1,11 @@
 import pytest
+from redis import exceptions as redis_exceptions
 
 from t_gnn.motif_engine import (
     InMemoryMotifStateStore,
     MotifAlertBus,
     MotifEngine,
+    MotifResetBus,
 )
 from t_gnn.motifs import MotifDefinition, MotifRegistry, MotifStep
 from t_gnn.pruning import PruneEventBus, PrunedEdgeEvent
@@ -31,12 +33,13 @@ _TWO_STEP = MotifDefinition(
 )
 
 
-def _engine(store=None, alert_bus=None, prune_event_bus=None, definitions=(_TWO_STEP,)):
+def _engine(store=None, alert_bus=None, prune_event_bus=None, reset_bus=None, definitions=(_TWO_STEP,)):
     return MotifEngine(
         definitions=list(definitions),
         state_store=store or InMemoryMotifStateStore(),
         alert_bus=alert_bus,
         prune_event_bus=prune_event_bus,
+        reset_bus=reset_bus,
     )
 
 
@@ -284,3 +287,112 @@ def test_redis_state_store_reset_on_prune():
         assert store.get(motif_name, "Machine:RB2") is None
     finally:
         client.delete(f"motif:state:{motif_name}:Machine:RB2")
+
+
+# --- MotifResetEvent / MotifResetBus (tasks.md 6.1/6.2 consumers) ----------------
+
+
+def test_on_prune_publishes_reset_event():
+    store = InMemoryMotifStateStore()
+    prune_bus = PruneEventBus()
+    reset_bus = MotifResetBus()
+    received = []
+    reset_bus.subscribe(received.append)
+    engine = _engine(store=store, prune_event_bus=prune_bus, reset_bus=reset_bus)
+
+    engine.on_edge(_edge("Machine:A", "Machine:B", t_e=0.0))
+    state = store.get("two_step", "Machine:B")
+    contributing_edge = Edge(
+        src="Machine:A", dst="Machine:B", edge_type="Authentication", protocol="Kerberos",
+        t_e=0.0, w_0=1.0, edge_id=state.matched_edges[0],
+    )
+
+    prune_bus.publish(PrunedEdgeEvent(edge=contributing_edge, w_at_prune=0.001, pruned_at=5.0))
+
+    assert len(received) == 1
+    assert received[0].motif_name == "two_step"
+    assert received[0].chain_key == "Machine:B"
+    assert received[0].triggering_edge_id == contributing_edge.edge_id
+    assert received[0].reset_at == 5.0
+
+
+def test_no_reset_event_when_prune_does_not_affect_any_state():
+    reset_bus = MotifResetBus()
+    received = []
+    reset_bus.subscribe(received.append)
+    prune_bus = PruneEventBus()
+    _engine(prune_event_bus=prune_bus, reset_bus=reset_bus)
+
+    unrelated = Edge(src="Machine:X", dst="Machine:Y", edge_type="Authentication", protocol="Kerberos", t_e=0.0, w_0=1.0)
+    prune_bus.publish(PrunedEdgeEvent(edge=unrelated, w_at_prune=0.001, pruned_at=5.0))
+
+    assert received == []
+
+
+# --- Graceful degradation on Redis outage (tasks.md 6.3, NFR4) ------------------
+
+
+class _FailingStateStore:
+    """Simulates a Redis outage: every call raises redis.exceptions.RedisError."""
+
+    def get(self, motif_name, chain_key):
+        raise redis_exceptions.ConnectionError("simulated Redis outage")
+
+    def set(self, state, ttl_seconds):
+        raise redis_exceptions.ConnectionError("simulated Redis outage")
+
+    def delete(self, motif_name, chain_key):
+        raise redis_exceptions.ConnectionError("simulated Redis outage")
+
+    def states_containing_edge(self, edge_id):
+        raise redis_exceptions.ConnectionError("simulated Redis outage")
+
+
+def test_on_edge_degrades_gracefully_when_state_store_unreachable():
+    engine = _engine(store=_FailingStateStore())
+
+    events = engine.on_edge(_edge("Machine:A", "Machine:B", t_e=0.0))  # must not raise
+
+    assert events == []
+    assert engine.available is False
+
+
+def test_on_prune_degrades_gracefully_when_state_store_unreachable():
+    prune_bus = PruneEventBus()
+    engine = _engine(store=_FailingStateStore(), prune_event_bus=prune_bus)
+    edge = _edge("Machine:A", "Machine:B", t_e=0.0)
+
+    prune_bus.publish(PrunedEdgeEvent(edge=edge, w_at_prune=0.001, pruned_at=5.0))  # must not raise
+
+    assert engine.available is False
+
+
+def test_engine_recovers_once_state_store_is_reachable_again():
+    store = InMemoryMotifStateStore()
+    engine = _engine(store=store)
+    engine.state_store = _FailingStateStore()
+
+    engine.on_edge(_edge("Machine:A", "Machine:B", t_e=0.0))
+    assert engine.available is False
+
+    engine.state_store = store  # Redis is back
+    engine.on_edge(_edge("Machine:A", "Machine:B", t_e=1.0))
+
+    assert engine.available is True
+    assert store.get("two_step", "Machine:B") is not None
+
+
+def test_baseline_deviation_detection_is_independent_of_motif_engine_outage():
+    """6.3's core claim: FR1.5 anomaly detection has zero dependency on
+    Redis/MotifEngine in the first place -- exercising that path while the
+    motif engine is degraded proves nothing coupled them together."""
+    from t_gnn.baseline import BaselineStore
+
+    motif_engine = _engine(store=_FailingStateStore())
+    baseline = BaselineStore()
+
+    motif_engine.on_edge(_edge("Machine:A", "Machine:B", t_e=0.0))  # degraded, but harmless
+    assert motif_engine.available is False
+
+    signal = baseline.observe("User:alice", "RDP", value=1.0, t=0.0)
+    assert signal is not None  # baseline machinery works regardless of motif engine's state
