@@ -1,0 +1,54 @@
+# Motif definitions -- config-driven extensibility mechanism for FR3.1/FR3.5/3.9.
+#
+# Each entry under `motifs` is validated against config/schema/motif.schema.json
+# (see src/t_gnn/motifs.py `MotifRegistry`). New motifs expressible in that
+# schema -- an ordered sequence of typed edge-pattern steps chained by an
+# entity-binding key, within a time bound -- are added here, no code change or
+# redeploy required (mirrors config/protocols.yaml's hot-reload pattern via
+# `MotifRegistry.reload()`). Motifs that need entity-linkage logic the schema
+# can't express (beyond the "identity"/"host_admin" key_resolvers) are the
+# code-driven escape hatch -- add a new KeyResolver in motifs.py and reference
+# its name here.
+#
+# The two entries below are specs.md FR3.1's seed motifs, used to bootstrap
+# and calibrate the engine (design.md 2.6); this is not the full motif
+# library (see tasks.md's Backlog item on the initial motif library).
+
+motifs:
+  admin_share_escalation:
+    description: >
+      FR3.1 seed motif 1: User -> Service Account -> Admin Share. A user
+      authenticates as a service/admin account, which then writes to an
+      administrative file share.
+    window_seconds: 3600  # 1 hour -- this hop is expected to be tight/interactive
+    steps:
+      - edge_type: Authentication
+        src_type: User
+        dst_type: User          # the "service account" is itself a User node
+        key_field: dst           # chain key = the service account's node id
+        key_resolver: identity
+      - edge_type: FileTransfer
+        protocol: SMB
+        src_type: User
+        dst_type: Machine        # the "admin share" target host
+        key_field: src           # must be the same service account bound above
+        key_resolver: identity
+
+  lateral_pivot:
+    description: >
+      FR3.1 seed motif 2 / the originating reference scenario (specs.md
+      §1.1, functionality.txt): Machine A authenticates to Machine B, and
+      within the time bound, Machine B's admin/service account
+      authenticates to or executes code on Machine C.
+    window_seconds: 14400  # ~4 hours, per specs.md FR3.1's example bound
+    steps:
+      - edge_type: Authentication
+        src_type: Machine
+        dst_type: Machine
+        key_field: dst            # chain key = Machine B
+        key_resolver: identity
+      - edge_type: [Authentication, RemoteCodeExecution]
+        src_type: User
+        dst_type: Machine
+        key_field: src             # must resolve to Machine B's admin account
+        key_resolver: host_admin

@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://t-gnn.internal/schema/motif.schema.json",
+  "title": "MotifDefinition",
+  "description": "Ordered/typed edge-pattern sequence + completion condition + time bound for a single cached motif (tasks.md 3.1, specs.md FR3.1/FR3.5/§7 'Motif Definition'). One instance of this shape per entry under config/motifs.yaml's top-level `motifs` map; the map key is the motif's name.",
+  "type": "object",
+  "required": ["window_seconds", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "description": {
+      "type": "string",
+      "description": "Human-readable summary of the attack pattern this motif represents."
+    },
+    "window_seconds": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Completion time bound: the motif resets if the gap between its first matched edge and its final matched edge exceeds this many seconds (specs.md FR3.1's '~4 hours' example)."
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Ordered sequence of edge patterns. Step 0 starts a new candidate chain; each subsequent step must match an edge that extends an existing chain's entity binding (see `key_field`/`key_resolver`). The motif completes when the final step matches.",
+      "items": {
+        "type": "object",
+        "required": ["key_field"],
+        "additionalProperties": false,
+        "properties": {
+          "edge_type": {
+            "description": "Edge type(s) this step accepts. Omit/null to match any edge_type.",
+            "oneOf": [
+              {"type": "null"},
+              {"type": "string", "enum": ["Authentication", "FileTransfer", "RemoteCodeExecution"]},
+              {"type": "array", "items": {"type": "string", "enum": ["Authentication", "FileTransfer", "RemoteCodeExecution"]}, "minItems": 1}
+            ]
+          },
+          "protocol": {
+            "description": "Protocol(s) this step accepts. Omit/null to match any protocol.",
+            "oneOf": [
+              {"type": "null"},
+              {"type": "string", "enum": ["RDP", "SMB", "Kerberos", "DNS"]},
+              {"type": "array", "items": {"type": "string", "enum": ["RDP", "SMB", "Kerberos", "DNS"]}, "minItems": 1}
+            ]
+          },
+          "src_type": {
+            "description": "Node type(s) this step's src must have. Omit/null to match any src_type.",
+            "oneOf": [
+              {"type": "null"},
+              {"type": "string", "enum": ["User", "Machine"]},
+              {"type": "array", "items": {"type": "string", "enum": ["User", "Machine"]}, "minItems": 1}
+            ]
+          },
+          "dst_type": {
+            "description": "Node type(s) this step's dst must have. Omit/null to match any dst_type.",
+            "oneOf": [
+              {"type": "null"},
+              {"type": "string", "enum": ["User", "Machine"]},
+              {"type": "array", "items": {"type": "string", "enum": ["User", "Machine"]}, "minItems": 1}
+            ]
+          },
+          "key_field": {
+            "type": "string",
+            "enum": ["src", "dst"],
+            "description": "Which endpoint of an edge matching this step carries the chain's entity-binding key: at step 0 this endpoint's id becomes the new chain's key; at later steps this endpoint must resolve (via key_resolver) to the chain's existing key."
+          },
+          "key_resolver": {
+            "type": "string",
+            "enum": ["identity", "host_admin"],
+            "default": "identity",
+            "description": "How to test whether key_field's endpoint continues the chain. 'identity': the endpoint id must literally equal the chain key. 'host_admin': the endpoint (a User) is treated as the admin/service account of the chain key (a Machine) via a documented naming-convention heuristic -- see motifs.py."
+          }
+        }
+      }
+    }
+  }
+}
