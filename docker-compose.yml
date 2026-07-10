@@ -1,13 +1,12 @@
-version: "3.8"
-
 # Phase 0.1 dev environment: Flink cluster, Redis (motif cache), Neo4j (cold storage).
 # Not for production use -- no auth hardening, no persistence tuning, no clustering.
 #
-# NOT CURRENTLY IN USE: this compose stack is kept as the target dev-infra
-# reference, but local development is temporarily pointed at a local
-# Postgres instance instead (see t_gnn/db.py, scripts/init_postgres.py,
-# README.md "Local dev database"). Bring this stack up once Flink/Redis/
-# Neo4j-dependent phases actually need it.
+# Brought up ahead of Phase 2 at the developer's request, so Neo4j is
+# available for Phase 2's cold-storage write path (design.md 2.4) from the
+# start rather than defaulting that work to Postgres. See CLAUDE.md's
+# "Local dev database" section for the current Postgres vs. this stack split
+# -- Postgres (t_gnn/db.py) remains available for anything that isn't
+# Flink/Redis/Neo4j-shaped.
 #
 # Usage:
 #   docker compose up -d

@@ -14,10 +14,30 @@ the source of truth and should be read before implementing any new phase:
 - `design.md` — architecture, component responsibilities, failure modes.
 - `tasks.md` — phased implementation plan with checkbox status; **check this first** to see what's already implemented before starting new work, and flip checkboxes as tasks complete.
 
-Only Phase 0 (Foundations) is implemented so far. Later phases (Flink decay
-pipeline, pruning watcher, Redis motif engine, Neo4j cold storage, T-GNN
-integration) do not have code yet — `docker-compose.yml` describes the target
-stack for them but isn't the current dev backend (see below).
+Phase 0 (Foundations), Phase 1 (Protocol-Aware Asymmetric Time-Decay), and
+Phase 2 (Dynamic Graph Pruning) are implemented so far. Phase 1 is pure-
+Python/staging (see the Architecture section for what each module stands
+in for and why). Phase 2 is a mix: the Active Graph Store and Pruning
+Watcher are framework-agnostic Python (no live Flink job), but its Neo4j
+cold-storage write path is real — it runs against the actual
+`docker-compose.yml` Neo4j instance via the `neo4j` driver, not a
+placeholder. `docker-compose.yml`'s Flink/Redis/Neo4j stack is running
+locally (brought up ahead of schedule, before Phase 2 started, at the
+developer's request) — see "Local dev database" below. Later phases
+(Redis motif engine, T-GNN integration) do not have code yet.
+
+## End-of-phase checklist
+
+When every checkbox in a `tasks.md` phase is flipped to done, before moving on:
+
+1. **Update this file.** Revise the "only Phase N is implemented" line above,
+   extend the Architecture section with whatever new load-bearing
+   abstractions/conventions that phase introduced, and add any new commands.
+   Keep it a living doc, not a Phase-0 snapshot.
+2. **Re-check `.gitignore`.** Scan for anything the phase's work generates
+   that isn't already covered — new build/cache artifacts (e.g. a new
+   toolchain's equivalent of `*.egg-info/`), new local data/output
+   directories, new env/credential files — and add entries before committing.
 
 ## Commands
 
@@ -28,20 +48,37 @@ pytest tests/test_schema.py              # run one test file
 pytest tests/test_schema.py::test_round_trip_json   # run one test
 python scripts/init_postgres.py          # idempotent: create the t_gnn_dev database
 python -m t_gnn.data.stage_lanl --input <auth.txt.gz> --output <dir>   # stage LANL dataset
+python -m t_gnn.data.calibrate_decay --staged-dir <dir> [--output report.json]   # suggest lambda_p per protocol from staged edges
+docker compose up -d                     # bring up Flink/Redis/Neo4j (needed for the Neo4j integration tests)
 ```
 
 There is no lint/format/build step configured yet.
 
 ## Local dev database — read before adding any persistence code
 
-Local development currently targets a Postgres instance the developer runs
-locally (`localhost:5432`, database `t_gnn_dev`) via `src/t_gnn/db.py`
-(`get_connection()`), **not** the `docker-compose.yml` stack (Flink/Redis/Neo4j).
-This is a deliberate temporary redirect, not the target architecture in
-`design.md`. Default any new persistence work to Postgres through
-`t_gnn/db.py` and create tables only when a task actually needs them, rather
-than pre-building schema for later phases. Bring up `docker-compose.yml`
-instead once a phase genuinely needs Flink/Redis/Neo4j semantics.
+`docker-compose.yml`'s Flink/Redis/Neo4j stack (`docker compose up -d`) is
+now running for local dev: Flink UI on `localhost:8081`, Neo4j on
+`localhost:7474`/`7687`, Redis on `localhost:6379` — verified reachable.
+It was brought up ahead of its originally-planned trigger point (Phase 3's
+Redis TTL semantics / Phase 4's Neo4j) at the developer's explicit request,
+so it's available from the start of Phase 2. New persistence work that maps
+to one of these systems' actual role in `design.md` — cold-storage edge
+writes to Neo4j (2.4), motif state in Redis (Phase 3) — should target that
+system directly now, not Postgres.
+
+Separately, a Postgres instance the developer runs locally (`localhost:5432`,
+database `t_gnn_dev`) is still reachable via `src/t_gnn/db.py`
+(`get_connection()`). It was the temporary redirect for persistence work
+before this stack existed; nothing has ever actually been written through it
+(`scripts/init_postgres.py` only creates the empty database — no tables
+exist yet), so nothing needs migrating. Keep using it only for persistence
+needs that *don't* map to Flink/Redis/Neo4j's roles in `design.md`; create
+tables only when a task actually needs them.
+
+Tests that need the live Neo4j instance (`tests/test_cold_storage.py`'s
+`Neo4jColdStorageWriter` tests) check connectivity at collection time and
+`skip` (not fail) if `docker compose up -d` hasn't been run — the rest of
+the suite doesn't depend on the stack being up.
 
 Connection settings load from `.env` (auto-loaded by `t_gnn/db.py`, gitignored,
 holds real credentials) with `.env.example` as the committed placeholder
@@ -70,6 +107,25 @@ explicitly a placeholder/staging-era loader — `design.md` §2.2 calls for
 these values to eventually live in Flink broadcast state for true hot-reload
 without redeploy (tasks.md 1.1/1.2); don't conflate the two until that phase
 is implemented.
+
+**Phase 1's decay/baseline/deviation logic is framework-agnostic Python,
+staged the same way** — each module below is the business logic a real
+Flink job's operators will call once one exists; none of it depends on a
+running Flink cluster today:
+
+- `src/t_gnn/decay.py` (`compute_weight()`, `DecayEngine`) — FR1.1/1.3: `w(e,t) = w_0 · e^(-λ_p·(t-t_e))`, with elapsed time clamped to zero rather than letting `t < t_e` amplify weight above `w_0`. `DecayEngine.refresh(edge, t)` returns a *new* `Edge` (via `dataclasses.replace`) with `w`/`w_evaluated_at` set — it never mutates the input edge.
+- `src/t_gnn/baseline.py` (`EWMABaseline`, `BaselineStore`, `DeviationSignal`) — FR1.4/1.5: an exponentially-weighted mean/variance profile keyed by `(entity, protocol)`, where `entity` is taken as `edge.src` (the acting principal, per `functionality.txt`'s "aggregated edge weights for a specific user"). `BaselineStore` is an in-memory dict standing in for Flink keyed state (design.md §2.3). `z_score` is computed against the baseline *before* the new observation is folded in (so an outlier is scored against unpolluted history), and is `None` until at least 2 prior samples with nonzero variance exist — avoids a misleading always-zero/divide-by-zero score early in a key's life.
+- `src/t_gnn/streaming.py` (`DecayStreamProcessor`) — ties `DecayEngine` + `BaselineStore` into the single per-edge step described in design.md §3 ("Data Flow") steps 2–4: refresh `w(e,t)`, then feed it to the entity/protocol baseline to get a `DeviationSignal`. This is the shape a Flink `ProcessFunction` will wrap per edge.
+- `src/t_gnn/data/calibrate_decay.py` (`calibrate()`) — tasks.md 1.7: derives a suggested `λ_p` per protocol from the median same-entity consecutive-edge time gap in staged LANL edges (`stage_lanl.py` output), but only *reports* a suggestion when a protocol clears `min_samples`; below that it flags `sufficient_data=False` and defers to the protocol's current registry value, per tasks.md 1.7's explicit "expert defaults if neither [dataset nor telemetry] is available" allowance. Only the tiny synthetic fixture is vendored — running this against it is a smoke test of the mechanism, not a real calibration.
+
+**Phase 2's dynamic graph pruning is a mix of framework-agnostic Python and
+one real infra integration** — the Active Graph Store and Pruning Watcher
+don't depend on a live Flink job, but the cold-storage write path is genuine
+(Neo4j is up):
+
+- `src/t_gnn/graph_store.py` (`ActiveGraphStore`) — FR2/NFR3: a hash map of `edge_id -> Edge` plus per-node outgoing/incoming adjacency sets (design.md 2.4's `TemporalEdgeStore`), guarded by a single `RLock` held only for the duration of each dict/set mutation. `to_pyg_edge_index()` materializes the *current* live state fresh on every call into a `torch.LongTensor` edge_index (shape `[2, E]`) plus the column-aligned edge id list and node-id-to-index map — Phase 5's customized T-GNN forward pass is the intended caller; Phase 2 itself does no message-passing.
+- `src/t_gnn/pruning.py` (`EpsilonController`, `PruneEventBus`/`PrunedEdgeEvent`, `PruningWatcher`) — FR2.2/2.3/2.5: `EpsilonController.compute_epsilon()` takes the *max* of real system-memory pressure (via `psutil`, `default_memory_probe()`) and graph-size pressure vs. a configurable `max_edges` ceiling, then interpolates between `epsilon_min`/`epsilon_max` — memory-aware per FR2.3 while still guaranteeing NFR3's size ceiling even if per-edge memory footprint isn't constant. `PruningWatcher.run_once(t)` is the synchronous, testable scan-and-prune pass; `start()`/`stop()` wrap it in a daemon background thread (FR2.1/2.5). Per FR2.4's "before removal" ordering, a candidate edge is written to cold storage *first* — only removed from the store on write success, left active for retry on failure (a full buffered/async write path is deliberately deferred to tasks.md 6.4, per that task split). `PruneEventBus` is a plain in-process pub/sub standing in for whatever bus a production deployment wires this to; Phase 3's Motif Engine (the first real subscriber) doesn't exist yet, so no Redis/Kafka-backed bus is justified for this hop today.
+- `src/t_gnn/cold_storage.py` (`ColdStorageWriter` protocol, `Neo4jColdStorageWriter`, `InMemoryColdStorageWriter`) — FR2.4/FR4.2: writes each pruned edge as `(Entity {id})-[:PRUNED_EDGE {...}]->(Entity {id})` via the real `neo4j` Bolt driver against `docker-compose.yml`'s Neo4j instance (connection config from `.env`'s `NEO4J_*` vars, defaulting to the compose stack's dev credentials), creating `Entity.id` and `PRUNED_EDGE.pruned_at` indexes on first use. This is genuinely wired up, not staged — Phase 4 will build out the full forensic schema/query API on top of this same relationship shape. `InMemoryColdStorageWriter` is a recording fake used in `PruningWatcher` unit tests that don't need live Neo4j.
 
 **Two ingestion adapters both produce `Edge` instances**, and are meant to be
 interchangeable inputs to the same downstream pipeline (design.md §2.9):
