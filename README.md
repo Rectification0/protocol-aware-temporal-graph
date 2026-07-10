@@ -10,9 +10,10 @@ design. `CLAUDE.md` has the detailed module-by-module architecture notes.
 
 ## Status
 
-Phases 0-3 are implemented: Foundations (edge/protocol schema + ingestion
+Phases 0-4 are implemented: Foundations (edge/protocol schema + ingestion
 adapters), Protocol-Aware Time-Decay (FR1), Dynamic Graph Pruning (FR2),
-and Stateful Motif Caching (FR3). See `tasks.md` for the per-task checklist.
+Stateful Motif Caching (FR3), and Cold Storage & Forensics (FR4). See
+`tasks.md` for the per-task checklist.
 
 - `config/schema/edge.schema.json`, `config/schema/motif.schema.json` -- the edge and motif definition contracts.
 - `config/protocols.yaml`, `config/motifs.yaml` -- protocol decay constants and the seed motif library.
@@ -20,6 +21,7 @@ and Stateful Motif Caching (FR3). See `tasks.md` for the per-task checklist.
 - `src/t_gnn/decay.py`, `src/t_gnn/baseline.py`, `src/t_gnn/streaming.py`, `src/t_gnn/data/calibrate_decay.py` -- Phase 1: per-protocol decay, EWMA baseline/deviation, and LANL-based calibration.
 - `src/t_gnn/graph_store.py`, `src/t_gnn/pruning.py`, `src/t_gnn/cold_storage.py` -- Phase 2: the Active Graph Store, the Pruning Watcher, and the Neo4j cold-storage write path.
 - `src/t_gnn/motifs.py`, `src/t_gnn/motif_engine.py` -- Phase 3: motif definitions and the Redis-backed delta-update/reset-on-prune engine.
+- `src/t_gnn/forensics.py` -- Phase 4: the forensic query API over Phase 2's Neo4j cold storage ("reconstruct activity around entity X in time window Y", point lookup by edge id).
 - `src/t_gnn/ingestion/sysmon_adapter.py`, `src/t_gnn/data/stage_lanl.py` -- the two reference ingestion adapters (Sysmon and offline LANL replay).
 
 ## Local dev environment

@@ -45,9 +45,9 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Phase 4 — Cold Storage & Forensics (FR4)
 
-- [ ] 4.1 Design Neo4j graph schema for pruned-edge storage (nodes/relationships, indexed by entity id + timestamp).
-- [ ] 4.2 Implement forensic query API/interface (e.g., "reconstruct activity around entity X in time window Y").
-- [ ] 4.3 Verify pruned edges retain full original metadata (protocol, weight-at-prune-time, timestamps, endpoints).
+- [x] 4.1 Design Neo4j graph schema for pruned-edge storage (nodes/relationships, indexed by entity id + timestamp). *(The `(Entity {id})-[:PRUNED_EDGE {...}]->(Entity {id})` shape and the `Entity.id`/`PRUNED_EDGE.pruned_at` indexes already came from task 2.4 (cold_storage.py); src/t_gnn/forensics.py adds the two indexes 4.2's query patterns actually need: `PRUNED_EDGE.t_e` (the *original event* time -- what design.md 2.7's "reconstruct activity in a time window" example reasons about, distinct from `pruned_at`'s eviction-time semantics already indexed for 2.4's audit use case) and `PRUNED_EDGE.edge_id` (point lookup, e.g. resolving a motif alert's `matched_edges` back to full metadata).)*
+- [x] 4.2 Implement forensic query API/interface (e.g., "reconstruct activity around entity X in time window Y"). *(src/t_gnn/forensics.py `Neo4jForensicQueryAPI` -- `reconstruct_activity(entity_id, start, end)` implements design.md 2.7's example query verbatim (matches `entity_id` as either endpoint, filters/orders by `t_e`); `get_edge(edge_id)` is the complementary point lookup. Reads the same relationship shape `Neo4jColdStorageWriter` (2.4) writes -- no second schema. Genuinely wired against the real docker-compose Neo4j instance, not a stub.)*
+- [x] 4.3 Verify pruned edges retain full original metadata (protocol, weight-at-prune-time, timestamps, endpoints). *(tests/test_forensics.py -- round-trips every `PrunedEdgeRecord` field through a real write + forensic read, including an end-to-end test that runs the real `PruningWatcher` and then reconstructs the pruned edge's full metadata via the forensic API, per FR4.2.)*
 
 ## Phase 5 — T-GNN Integration
 
