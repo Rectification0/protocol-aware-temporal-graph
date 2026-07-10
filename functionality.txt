@@ -1,0 +1,152 @@
+================================================================================
+  REWORKED BLUEPRINT
+  Protocol-Aware Asymmetric Decay and Stateful Motif Pruning in CTDGs
+================================================================================
+
+--------------------------------------------------------------------------------
+ORIGIN & REFERENCE SCENARIO
+--------------------------------------------------------------------------------
+
+This blueprint generalizes an originating concept: detecting APT lateral
+movement by building a Continuous-Time Dynamic Graph (CTDG) from Windows
+Event Logs / Sysmon telemetry, where:
+
+    - Nodes  = users and machines
+    - Edges  = authentication events, file transfers, remote code executions
+
+Canonical attack pattern (the motivating example):
+
+    Machine A authenticates to Machine B, and several hours later,
+    Machine B's admin account authenticates to / queries Machine C.
+
+    Each hop looks like normal IT activity in isolation - only the
+    timed, chained sequence reveals the lateral pivot.
+
+Reference validation data: the LANL Comprehensive Cybersecurity dataset
+(offline replay) and production Sysmon/Windows Event Logs. Base modeling
+library: PyTorch Geometric Temporal, customized per Section on Graph
+Engine below.
+
+The three mechanisms below are the generalization of that concept into a
+protocol-agnostic, production-scale, real-time architecture.
+
+--------------------------------------------------------------------------------
+THE PROBLEM
+--------------------------------------------------------------------------------
+
+Continuous-Time Dynamic Graphs (CTDGs) are computationally expensive. When
+applied to enterprise environments, the graph collapses under the sheer volume
+of billions of benign daily logs.
+
+Furthermore, standard T-GNNs treat all historical events equally over time,
+failing to account for the fact that:
+
+    - a dangling Kerberos ticket is suspicious after 10 hours
+    - an open SMB file share might be normal for 48 hours
+
+--------------------------------------------------------------------------------
+THE SOLUTION
+--------------------------------------------------------------------------------
+
+An ingestion and inference pipeline that utilizes protocol-specific mathematical
+time-decay to dynamically prune the graph in real time, coupled with a stateful
+caching system for temporal motifs.
+
+
+--------------------------------------------------------------------------------
+1. PROTOCOL-AWARE ASYMMETRIC TIME-DECAY MECHANISM
+--------------------------------------------------------------------------------
+
+Instead of a global decay function, the system assigns a unique half-life to
+every edge based on its specific protocol (RDP, SMB, Kerberos, DNS).
+
+The weight of an edge `e` of protocol type `p` at current time `t` is
+calculated dynamically:
+
+    w(e, t) = w_0 * e^(-lambda_p * (t - t_e))
+
+Where:
+    w_0        = the initial weight (severity / importance) of the event
+    lambda_p   = the protocol-specific decay constant
+                 (e.g. lambda_RDP decays rapidly, lambda_SMB decays slowly)
+    t_e        = the timestamp of the original event
+
+Patentable Angle:
+    The T-GNN does not just look at "old vs. new" events; it learns the
+    baseline distribution of w(e, t) across the network. A "low and slow"
+    APT triggers an anomaly not just because of the sequence of events, but
+    because the aggregated edge weights for a specific user mathematically
+    deviate from the protocol-decay baseline.
+
+
+--------------------------------------------------------------------------------
+2. THRESHOLD-BASED DYNAMIC GRAPH PRUNING (SCALE)
+--------------------------------------------------------------------------------
+
+To solve the memory exhaustion problem inherent in enterprise CTDGs, a
+continuous pruning layer is introduced immediately preceding the T-GNN
+inference engine.
+
+The Mechanism:
+    As the system ingests streaming data (e.g., via Apache Flink), a
+    background process continuously calculates w(e, t) for active edges.
+
+The Threshold:
+    When w(e, t) < epsilon (where epsilon is a dynamic threshold optimized
+    for system memory), the edge is physically severed from the active
+    Graph RAM and serialized to a cold-storage graph database.
+
+Patentable Angle:
+    This isn't just data archiving; it is a proprietary memory-management
+    technique specifically designed to keep T-GNN inference latency in the
+    sub-millisecond range by bounding the maximum size of the active spatial
+    neighborhood.
+
+
+--------------------------------------------------------------------------------
+3. STATEFUL MOTIF CACHING ARCHITECTURE
+--------------------------------------------------------------------------------
+
+Standard GNNs recalculate node embeddings across the entire graph structure.
+This architecture bypasses that by caching specific, high-risk topological
+shapes ("motifs") in memory.
+
+The Mechanism:
+    The system maintains a distributed hash table of "suspicious subgraphs."
+    This generalizes to any operator-defined motif, not a fixed pair of
+    patterns - for example, User -> Service Account -> Admin Share, or the
+    timed two-hop pivot Machine A -> Machine B, then Machine B's admin
+    account -> Machine C within a bounded window.
+
+Continuous Update:
+    When a new edge is ingested, the engine does not traverse the whole
+    graph. It performs a localized delta-update to check if the new edge
+    completes a cached motif. If the sequence is broken by time (due to the
+    decay function pruning an older edge), the motif state resets.
+
+Patentable Angle:
+    Claiming the specific data structure used to cache partial temporal
+    graph motifs, and the algorithmic method for performing delta-updates
+    on those motifs without recalculating the global graph state.
+
+
+--------------------------------------------------------------------------------
+REVISED TECH STACK
+--------------------------------------------------------------------------------
+
+  Ingestion & State   Apache Flink   (real-time streaming calculation of the
+                                      decay function lambda_p)
+                      Redis          (stateful motif caching)
+
+  Graph Engine        PyTorch Geometric
+                                     (customized to support dynamic dropping
+                                      of edges during the forward pass)
+
+  Storage             Neo4j          (cold storage of pruned edges and
+                                      post-incident forensics)
+
+================================================================================
+  See also: specs.md (requirements), design.md (architecture),
+  tasks.md (implementation plan)
+================================================================================
+    

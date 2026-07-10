@@ -1,0 +1,82 @@
+version: "3.8"
+
+# Phase 0.1 dev environment: Flink cluster, Redis (motif cache), Neo4j (cold storage).
+# Not for production use -- no auth hardening, no persistence tuning, no clustering.
+#
+# NOT CURRENTLY IN USE: this compose stack is kept as the target dev-infra
+# reference, but local development is temporarily pointed at a local
+# Postgres instance instead (see t_gnn/db.py, scripts/init_postgres.py,
+# README.md "Local dev database"). Bring this stack up once Flink/Redis/
+# Neo4j-dependent phases actually need it.
+#
+# Usage:
+#   docker compose up -d
+#   Flink UI:  http://localhost:8081
+#   Neo4j UI:  http://localhost:7474  (user: neo4j / password: see NEO4J_AUTH below)
+#   Redis:     localhost:6379
+
+services:
+  jobmanager:
+    image: flink:1.18-scala_2.12-java11
+    command: jobmanager
+    ports:
+      - "8081:8081"
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: jobmanager
+    volumes:
+      - flink-jobs:/opt/flink/usrlib
+    networks:
+      - t-gnn-dev
+
+  taskmanager:
+    image: flink:1.18-scala_2.12-java11
+    command: taskmanager
+    depends_on:
+      - jobmanager
+    scale: 1
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: jobmanager
+        taskmanager.numberOfTaskSlots: 4
+    volumes:
+      - flink-jobs:/opt/flink/usrlib
+    networks:
+      - t-gnn-dev
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - t-gnn-dev
+
+  neo4j:
+    image: neo4j:5-community
+    ports:
+      - "7474:7474" # HTTP browser
+      - "7687:7687" # Bolt
+    environment:
+      - NEO4J_AUTH=neo4j/devpassword123
+      - NEO4J_dbms_memory_pagecache_size=512M
+      - NEO4J_dbms_memory_heap_max__size=1G
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+    networks:
+      - t-gnn-dev
+
+volumes:
+  flink-jobs:
+  redis-data:
+  neo4j-data:
+  neo4j-logs:
+
+networks:
+  t-gnn-dev:
+    driver: bridge

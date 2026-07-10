@@ -1,0 +1,43 @@
+# Protocol Decay Registry -- placeholder configuration (tasks.md 0.3).
+#
+# lambda_p is the decay constant in w(e,t) = w_0 * e^(-lambda_p * (t - t_e)),
+# with (t - t_e) in seconds. half_life_hours is the derived, human-readable
+# figure (ln(2) / lambda_p, converted to hours) kept here only as a sanity
+# check for whoever edits lambda_p by hand -- the loader treats lambda_p as
+# the source of truth and does not read half_life_hours.
+#
+# These are expert-defaults / placeholders for early testing (0.3) and
+# calibration harness wiring (1.7), NOT tuned values. They will be replaced
+# during the LANL replay calibration pass (task 1.7).
+#
+# Rationale for relative ordering (specs.md P2, functionality.txt):
+#   - RDP: interactive remote sessions are short-lived; a stale RDP edge
+#     stops being meaningful quickly -> fastest decay.
+#   - Kerberos: ticket lifetime is bounded (default domain policy ~10h);
+#     dangling tickets become suspicious on that order -> medium-fast decay.
+#   - SMB: file shares/mounts are routinely left open for a work-day or two
+#     -> slow decay.
+#   - DNS: resolution activity is ambient/background noise at enterprise
+#     volume and individually low-signal -> slowest decay, longest memory.
+default_lambda_p: 0.0000198  # ~10h half-life, used when protocol is unrecognized
+
+protocols:
+  RDP:
+    lambda_p: 0.0001925       # ~1h half-life
+    half_life_hours: 1
+    description: Remote Desktop Protocol interactive sessions.
+
+  Kerberos:
+    lambda_p: 0.0000192       # ~10h half-life
+    half_life_hours: 10
+    description: Kerberos ticket-granting/service-ticket exchanges.
+
+  SMB:
+    lambda_p: 0.0000040       # ~48h half-life
+    half_life_hours: 48
+    description: SMB file-share access/mounts.
+
+  DNS:
+    lambda_p: 0.0000010       # ~192h (8 day) half-life
+    half_life_hours: 192
+    description: DNS resolution queries; ambient background traffic.

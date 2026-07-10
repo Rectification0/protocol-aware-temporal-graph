@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://t-gnn.internal/schema/edge.schema.json",
+  "title": "Edge",
+  "description": "Shared edge data contract for Flink, PyTorch Geometric, Redis, and Neo4j (tasks.md 0.2, specs.md FR5.1/FR5.2).",
+  "type": "object",
+  "required": ["src", "dst", "edge_type", "protocol", "t_e", "w_0"],
+  "additionalProperties": false,
+  "properties": {
+    "edge_id": {
+      "type": "string",
+      "description": "Deterministic id (e.g. hash of src|dst|protocol|t_e) used as the Active Graph Store / Redis / Neo4j key."
+    },
+    "src": {
+      "type": "string",
+      "description": "Source node id, e.g. 'User:alice' or 'Machine:host-042'."
+    },
+    "dst": {
+      "type": "string",
+      "description": "Destination node id, same id format as src."
+    },
+    "src_type": {
+      "type": "string",
+      "enum": ["User", "Machine"],
+      "description": "Node type of src per specs.md FR5.1 (minimum: User, Machine/Host)."
+    },
+    "dst_type": {
+      "type": "string",
+      "enum": ["User", "Machine"]
+    },
+    "edge_type": {
+      "type": "string",
+      "enum": ["Authentication", "FileTransfer", "RemoteCodeExecution"],
+      "description": "specs.md FR5.2 minimum edge-type taxonomy."
+    },
+    "protocol": {
+      "type": "string",
+      "enum": ["RDP", "SMB", "Kerberos", "DNS"],
+      "description": "Underlying wire protocol; selects lambda_p from the Protocol Decay Registry (FR1.2)."
+    },
+    "t_e": {
+      "type": "number",
+      "description": "Original event timestamp, epoch seconds (UTC)."
+    },
+    "w_0": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Initial edge weight (severity/importance) at ingest time."
+    },
+    "w": {
+      "type": ["number", "null"],
+      "description": "w(e,t) at last evaluation; null until first computed. Not authoritative -- recomputed on read (design.md 2.1)."
+    },
+    "w_evaluated_at": {
+      "type": ["number", "null"],
+      "description": "Wall-clock time (epoch seconds) the w field was last recomputed."
+    },
+    "source_system": {
+      "type": "string",
+      "description": "Ingestion adapter that produced this edge, e.g. 'sysmon', 'lanl_replay'."
+    },
+    "raw_event_id": {
+      "type": ["string", "null"],
+      "description": "Originating log event id (e.g. Sysmon/Security Event ID) for forensic traceability."
+    }
+  }
+}

@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+data/lanl/raw/*.gz
+!data/lanl/raw/sample_auth.txt.gz
+data/lanl/staged/
