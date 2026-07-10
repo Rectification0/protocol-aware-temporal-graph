@@ -15,15 +15,15 @@ the source of truth and should be read before implementing any new phase:
 - `tasks.md` — phased implementation plan with checkbox status; **check this first** to see what's already implemented before starting new work, and flip checkboxes as tasks complete.
 
 Phase 0 (Foundations), Phase 1 (Protocol-Aware Asymmetric Time-Decay),
-Phase 2 (Dynamic Graph Pruning), Phase 3 (Stateful Motif Caching), and
-Phase 4 (Cold Storage & Forensics) are implemented so far. Phase 1 is
-pure-Python/staging (see the Architecture section for what each module
-stands in for and why). Phase 2 is a mix: the Active Graph Store and
-Pruning Watcher are framework-agnostic Python (no live Flink job), but its
-Neo4j cold-storage write path is real — it runs against the actual
-`docker-compose.yml` Neo4j instance via the `neo4j` driver, not a
-placeholder. Phase 3 is the same kind of mix: the motif definition
-schema/registry and the engine's delta-update/reset logic are
+Phase 2 (Dynamic Graph Pruning), Phase 3 (Stateful Motif Caching), Phase 4
+(Cold Storage & Forensics), and Phase 5 (T-GNN Integration) are implemented
+so far. Phase 1 is pure-Python/staging (see the Architecture section for
+what each module stands in for and why). Phase 2 is a mix: the Active
+Graph Store and Pruning Watcher are framework-agnostic Python (no live
+Flink job), but its Neo4j cold-storage write path is real — it runs
+against the actual `docker-compose.yml` Neo4j instance via the `neo4j`
+driver, not a placeholder. Phase 3 is the same kind of mix: the motif
+definition schema/registry and the engine's delta-update/reset logic are
 framework-agnostic Python (no live Flink edge-ingest job driving
 `MotifEngine.on_edge()` yet), but its Redis-backed motif-state store is
 real — `RedisMotifStateStore` runs against the actual `docker-compose.yml`
@@ -31,11 +31,16 @@ Redis instance via the `redis` driver, with the reset-on-prune wiring
 (`MotifEngine.on_prune`) connected live to Phase 2's `PruneEventBus`. Phase
 4 is entirely real, no staging split — it's a read-only query layer over
 the same live Neo4j data Phase 2 already writes, so there's no framework
-(Flink/PyG) dependency to stand in for in the first place.
+(Flink/PyG) dependency to stand in for in the first place. Phase 5 uses a
+genuinely real PyTorch Geometric forward pass over the live `ActiveGraphStore`
+— nothing about the graph-sourcing/feature-wiring/trigger integration is
+staged — but per specs.md §4's explicit non-goal, the model architecture
+itself is a deliberately small, untrained reference network, not a
+production-trained T-GNN; see the Architecture section.
 `docker-compose.yml`'s Flink/Redis/Neo4j stack is running locally (brought
 up ahead of schedule, before Phase 2 started, at the developer's request)
-— see "Local dev database" below. Later phases (T-GNN integration) do not
-have code yet.
+— see "Local dev database" below. Later phases (observability/hardening,
+documentation/rollout) do not have code yet.
 
 ## End-of-phase checklist
 
@@ -178,3 +183,12 @@ Neo4j:
 not a second cold-storage implementation:
 
 - `src/t_gnn/forensics.py` (`Neo4jForensicQueryAPI`, `PrunedEdgeRecord`) — FR4.1/4.2/4.3: reads the exact `(Entity)-[:PRUNED_EDGE]->(Entity)` relationship shape `cold_storage.py`'s `Neo4jColdStorageWriter` writes; there is deliberately no second schema. `reconstruct_activity(entity_id, start, end)` implements design.md 2.7's example query verbatim — matches `entity_id` as either endpoint and filters/orders by `PRUNED_EDGE.t_e` (the *original event* time), which is a different index than the `pruned_at` (eviction time) one 2.4 already created for its own audit use case — both are real indexes, not redundant. `get_edge(edge_id)` is the point-lookup complement, e.g. for resolving a `MotifCompletionEvent.matched_edges` id (motif_engine.py) back to full metadata. Every field FR4.2 requires round-trips through `PrunedEdgeRecord`; there's no `InMemory*` fake here since nothing else in the codebase consumes this API programmatically yet (it's an investigator-facing leaf, not a dependency other unit tests need to swap out).
+
+**Phase 5 wires the earlier phases' live state and signals into an actual
+PyTorch Geometric forward pass**, not a placeholder — but per specs.md §4's
+explicit non-goal ("replacing the T-GNN model architecture itself"), the
+*model* is deliberately minimal; only the integration seams are meant to
+be production-shaped:
+
+- `src/t_gnn/tgnn.py` (`DynamicTGNN`, `EntityFeatureTable`, `TGNNInferenceEngine`, `InferenceResult`/`InferenceResultBus`) — 5.1/5.2/5.3, design.md 2.4/2.8: `DynamicTGNN.score_entities()` is the customized forward pass (5.1) — it calls `ActiveGraphStore.to_pyg_edge_index()` (2.1) fresh on every invocation rather than caching it, so an edge pruned since the last call is simply absent from the next pass ("dynamic dropping of edges during the forward pass," verbatim from the tech-stack note). `EntityFeatureTable` is the missing piece `to_pyg_edge_index()` alone doesn't provide: a *stable* node_id -> embedding-row registry, since that method's own `node_index` is recomputed fresh (and non-stable) on every call. `TGNNInferenceEngine.observe_deviation()` caches each entity's latest FR1.5 z-score, concatenated onto its embedding as an extra feature column before every forward pass (5.2) — a real input, not a side-channel annotation (see `test_deviation_feature_changes_the_score` in tests/test_tgnn.py). `TGNNInferenceEngine.on_motif_completion()` auto-subscribes to a `MotifAlertBus` (3.5) and scores only the completed motif's `chain_key` plus its live neighbors immediately (5.3's fast path), rather than waiting for the next scheduled `run_once()` — `run_once()`/`start()`/`stop()` follow the same synchronous-pass-plus-daemon-thread shape as `PruningWatcher` (2.2). The two-`SAGEConv`-layer model itself is untrained/randomly initialized on purpose — swapping in a production-trained architecture later replaces this class, not the engine wired around it.
+- The two Phase 5 end-to-end tests (tasks.md 5.4/5.5, in tests/test_tgnn_e2e.py) exercise this wiring against the earlier phases for real: 5.4 stages the sample LANL fixture (0.4) through `DecayStreamProcessor` as background traffic, layers a synthetic "low and slow" tail onto one entity, and confirms FR1.5's z-score flags the tail's anomalous edge; 5.5 replays the canonical two-hop lateral-pivot sequence through a real `MotifEngine` and confirms its completion alert drives `TGNNInferenceEngine`'s fast path with no wiring beyond construction.

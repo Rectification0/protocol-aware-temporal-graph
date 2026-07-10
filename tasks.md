@@ -51,11 +51,11 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Phase 5 — T-GNN Integration
 
-- [ ] 5.1 Customize PyTorch Geometric forward pass to read live Active Graph Store (dynamic edge dropping mid-stream).
-- [ ] 5.2 Wire deviation signal (1.5) into T-GNN as an input feature.
-- [ ] 5.3 Wire motif-completion signal (3.5) as a fast-path trigger for targeted/immediate inference.
-- [ ] 5.4 End-to-end test: replay the LANL dataset (task 0.4) as a "low and slow" APT scenario and confirm detection via baseline deviation.
-- [ ] 5.5 End-to-end test: inject a synthetic motif-matching attack sequence and confirm motif-completion alert fires.
+- [x] 5.1 Customize PyTorch Geometric forward pass to read live Active Graph Store (dynamic edge dropping mid-stream). *(src/t_gnn/tgnn.py `DynamicTGNN.score_entities()` -- re-fetches `edge_index`/`node_index` from `ActiveGraphStore.to_pyg_edge_index()` (2.1) on every call rather than caching it, so an edge pruned since the last call is simply absent from the next forward pass. Per specs.md §4's non-goal excluding T-GNN model-architecture design, the model itself (two `SAGEConv` layers + a linear score head) is a deliberately small, untrained reference forward pass -- the integration seam is the deliverable, not a production-accurate detector.)*
+- [x] 5.2 Wire deviation signal (1.5) into T-GNN as an input feature. *(src/t_gnn/tgnn.py `TGNNInferenceEngine.observe_deviation()` caches each entity's latest FR1.5 z-score; `DynamicTGNN.score_entities()` concatenates it onto that entity's stable base embedding (`EntityFeatureTable`) as an extra input column before the forward pass, so a deviation literally changes what the model sees, not just a side-channel annotation.)*
+- [x] 5.3 Wire motif-completion signal (3.5) as a fast-path trigger for targeted/immediate inference. *(src/t_gnn/tgnn.py `TGNNInferenceEngine.on_motif_completion()` -- auto-subscribed to a `MotifAlertBus` (3.5) when passed to the constructor; scores only the completed motif's `chain_key` plus its live neighbors (`ActiveGraphStore.neighbors()`) immediately, rather than waiting for the next scheduled `run_once()` pass.)*
+- [x] 5.4 End-to-end test: replay the LANL dataset (task 0.4) as a "low and slow" APT scenario and confirm detection via baseline deviation. *(tests/test_tgnn_e2e.py `test_lanl_replay_low_and_slow_apt_detected_via_baseline_deviation` -- stages the sample LANL fixture (0.4) as real background traffic through `DecayStreamProcessor`, layers a synthetic low-and-slow tail onto one of its entities, and confirms FR1.5's z-score flags the tail's anomalous final event (\|z\|>3) while the normal tail stays unremarkable; also confirms the resulting `DeviationSignal` feeds through `TGNNInferenceEngine` per 5.2.)*
+- [x] 5.5 End-to-end test: inject a synthetic motif-matching attack sequence and confirm motif-completion alert fires. *(tests/test_tgnn_e2e.py `test_synthetic_lateral_pivot_attack_fires_alert_and_triggers_fast_path_inference` -- replays the canonical two-hop lateral-pivot sequence through a real `MotifEngine`, confirms the `MotifCompletionEvent` fires only after both hops, and confirms that alert immediately drove `TGNNInferenceEngine`'s fast path (5.3) via the shared `MotifAlertBus` with no extra wiring beyond construction.)*
 
 ## Phase 6 — Observability & Hardening
 
