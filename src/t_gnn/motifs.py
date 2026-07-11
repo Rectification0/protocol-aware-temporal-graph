@@ -142,6 +142,46 @@ class MotifStep:
             return False
         return True
 
+    def match_score(self, edge: Edge) -> Optional[float]:
+        """Fuzzy counterpart to `matches_shape()` (tasks.md Backlog B.4,
+        proposal.docx §7's "probabilistic or fuzzy pattern matching ... to
+        capture variations of known attack techniques").
+
+        `src_type`/`dst_type` still must match exactly when specified --
+        they encode the pattern's structural *roles* (e.g. "a Machine
+        authenticating to a Machine"), not a technique an attacker could
+        plausibly substitute. `edge_type`/`protocol` are the dimensions
+        where a real variation is plausible (an attacker using RDP where
+        the canonical pattern used SMB to reach the same kind of hop), so
+        they contribute partial credit instead of an all-or-nothing reject.
+
+        Returns `None` if the step cannot match at all (a structural-role
+        mismatch, or every specified fuzzy dimension missed); otherwise a
+        score in `(0, 1]`, where `1.0` means an exact match identical to
+        `matches_shape()`.
+        """
+        if self.src_type and edge.src_type not in self.src_type:
+            return None
+        if self.dst_type and edge.dst_type not in self.dst_type:
+            return None
+
+        dimensions = 0
+        matched = 0
+        if self.edge_type:
+            dimensions += 1
+            if edge.edge_type in self.edge_type:
+                matched += 1
+        if self.protocol:
+            dimensions += 1
+            if edge.protocol in self.protocol:
+                matched += 1
+
+        if dimensions == 0:
+            return 1.0
+        if matched == 0:
+            return None
+        return matched / dimensions
+
     def endpoint(self, edge: Edge) -> str:
         return edge.src if self.key_field == "src" else edge.dst
 

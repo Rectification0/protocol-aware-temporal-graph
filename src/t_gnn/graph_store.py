@@ -28,6 +28,7 @@ from typing import Optional
 import torch
 
 from t_gnn.schema import Edge
+from t_gnn.sharding import stable_shard_index
 
 
 class ActiveGraphStore:
@@ -133,6 +134,93 @@ class ActiveGraphStore:
             src_indices.append(_index_for(edge.src))
             dst_indices.append(_index_for(edge.dst))
             edge_ids.append(edge.edge_id)
+
+        edge_index = torch.tensor([src_indices, dst_indices], dtype=torch.long)
+        return edge_index, edge_ids, node_index
+
+
+class ShardedActiveGraphStore:
+    """Edge-partitioned distribution of `ActiveGraphStore` across N shards
+    (tasks.md Backlog B.5, proposal.docx §7's "distributing the active
+    graph ... across multiple nodes to support even larger deployments").
+
+    Partitions by edge id (`stable_shard_index()` over `edge.edge_id`, not
+    node id) -- a deliberately simple scheme: every edge lives on exactly
+    one shard, and `edge_id` alone (already a stable hash, `schema.py`'s
+    `make_edge_id()`) determines which one, so `upsert`/`remove`/`get` never
+    need a cross-shard directory to find the right shard. The tradeoff is
+    that node-centric queries (`neighbors()`, `to_pyg_edge_index()`) fan out
+    to every shard and merge results -- a real, if less efficient,
+    distributed-systems pattern (scatter-gather), in exchange for not
+    needing a node-to-shard directory service a vertex-partitioned scheme
+    would require.
+
+    Each shard is an ordinary `ActiveGraphStore`. In a genuinely distributed
+    deployment these would be separate processes/machines behind some RPC
+    layer; here they are in-process -- the same relationship
+    `InMemoryColdStorageWriter` has to a real distributed writer, except
+    here the partitioning/routing logic itself is real and directly
+    tested, not a fake standing in for one.
+    """
+
+    def __init__(self, num_shards: int) -> None:
+        if num_shards < 1:
+            raise ValueError("num_shards must be >= 1")
+        self.num_shards = num_shards
+        self.shards: list[ActiveGraphStore] = [ActiveGraphStore() for _ in range(num_shards)]
+
+    def shard_for(self, edge_id: str) -> ActiveGraphStore:
+        return self.shards[stable_shard_index(edge_id, self.num_shards)]
+
+    def upsert(self, edge: Edge) -> None:
+        self.shard_for(edge.edge_id).upsert(edge)
+
+    def remove(self, edge_id: str) -> Optional[Edge]:
+        return self.shard_for(edge_id).remove(edge_id)
+
+    def get(self, edge_id: str) -> Optional[Edge]:
+        return self.shard_for(edge_id).get(edge_id)
+
+    def edges(self) -> list[Edge]:
+        result: list[Edge] = []
+        for shard in self.shards:
+            result.extend(shard.edges())
+        return result
+
+    def __len__(self) -> int:
+        return sum(len(shard) for shard in self.shards)
+
+    def neighbors(self, node_id: str, direction: str = "out") -> list[str]:
+        """Scatter-gather across every shard -- see class docstring for why
+        this can't be routed to a single shard the way edge-keyed
+        operations are."""
+        result: list[str] = []
+        for shard in self.shards:
+            result.extend(shard.neighbors(node_id, direction=direction))
+        return result
+
+    def to_pyg_edge_index(self) -> tuple[torch.Tensor, list[str], dict[str, int]]:
+        """Merges every shard's live edges into one combined edge_index --
+        same return shape as `ActiveGraphStore.to_pyg_edge_index()`, so this
+        is a drop-in graph source for `DynamicTGNN.score_entities()`
+        (tgnn.py, Phase 5)."""
+        node_index: dict[str, int] = {}
+        src_indices: list[int] = []
+        dst_indices: list[int] = []
+        edge_ids: list[str] = []
+
+        def _index_for(node_id: str) -> int:
+            idx = node_index.get(node_id)
+            if idx is None:
+                idx = len(node_index)
+                node_index[node_id] = idx
+            return idx
+
+        for shard in self.shards:
+            for edge in shard.edges():
+                src_indices.append(_index_for(edge.src))
+                dst_indices.append(_index_for(edge.dst))
+                edge_ids.append(edge.edge_id)
 
         edge_index = torch.tensor([src_indices, dst_indices], dtype=torch.long)
         return edge_index, edge_ids, node_index

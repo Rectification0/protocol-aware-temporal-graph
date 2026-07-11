@@ -69,3 +69,22 @@ class ProtocolDecayRegistry:
 
     def lambda_for(self, protocol: str) -> float:
         return self.get(protocol).lambda_p
+
+    def update(self, protocol: str, lambda_p: float) -> None:
+        """In-memory update of a single protocol's lambda_p, without
+        touching config/protocols.yaml on disk (tasks.md Backlog B.3's
+        `AdaptiveDecayCalibrator` writes here; a human-driven correction
+        per task 1.7 still goes through hand-editing the YAML + `reload()`).
+        Preserves the existing `half_life_hours`/`description` metadata for
+        that protocol if it was already configured; falls back to a bare
+        `ProtocolDecayConfig` if the protocol wasn't already in the
+        registry (e.g. a protocol observed live that isn't in
+        config/protocols.yaml, previously only covered by the
+        `default_lambda_p` fallback)."""
+        existing = self._protocols.get(protocol)
+        self._protocols[protocol] = ProtocolDecayConfig(
+            protocol=protocol,
+            lambda_p=lambda_p,
+            half_life_hours=existing.half_life_hours if existing else None,
+            description=existing.description if existing else None,
+        )

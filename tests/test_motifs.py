@@ -117,3 +117,35 @@ def test_step_candidate_key_uses_configured_resolver_and_field():
     step = MotifStep(key_field="src", key_resolver="host_admin")
     edge = _edge(src="User:C1042-svc", dst="Machine:C9999", edge_type="RemoteCodeExecution")
     assert step.candidate_key(edge) == "Machine:C1042"
+
+
+# --- MotifStep.match_score (fuzzy matching, tasks.md Backlog B.4) -----------------
+
+
+def test_match_score_is_one_for_an_exact_match():
+    step = MotifStep(key_field="dst", edge_type=frozenset({"Authentication"}), protocol=frozenset({"RDP"}))
+    assert step.match_score(_edge(edge_type="Authentication", protocol="RDP")) == 1.0
+
+
+def test_match_score_gives_partial_credit_for_one_of_two_fuzzy_dimensions():
+    step = MotifStep(key_field="dst", edge_type=frozenset({"Authentication"}), protocol=frozenset({"RDP"}))
+    # edge_type matches, protocol doesn't -- 1 of 2 fuzzy dimensions satisfied.
+    assert step.match_score(_edge(edge_type="Authentication", protocol="SMB")) == 0.5
+
+
+def test_match_score_is_none_when_every_fuzzy_dimension_misses():
+    step = MotifStep(key_field="dst", edge_type=frozenset({"Authentication"}), protocol=frozenset({"RDP"}))
+    assert step.match_score(_edge(edge_type="FileTransfer", protocol="SMB")) is None
+
+
+def test_match_score_still_hard_rejects_on_src_or_dst_type_mismatch():
+    step = MotifStep(key_field="dst", src_type=frozenset({"Machine"}), dst_type=frozenset({"Machine"}),
+                      edge_type=frozenset({"Authentication"}))
+    # Structural role is wrong (User, not Machine) -- no amount of edge_type/
+    # protocol credit should rescue this.
+    assert step.match_score(_edge(src="User:alice", dst="Machine:C1", edge_type="Authentication")) is None
+
+
+def test_match_score_with_no_filters_is_one():
+    step = MotifStep(key_field="src")
+    assert step.match_score(_edge(edge_type="RemoteCodeExecution", protocol="DNS")) == 1.0

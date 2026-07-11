@@ -70,9 +70,10 @@ from typing import Callable, Optional, Protocol
 
 from redis.exceptions import RedisError
 
-from t_gnn.motifs import MotifDefinition
+from t_gnn.motifs import MotifDefinition, MotifStep
 from t_gnn.pruning import PruneEventBus, PrunedEdgeEvent
 from t_gnn.schema import Edge
+from t_gnn.sharding import stable_shard_index
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,11 @@ class MotifState:
     started_at: float
     last_edge_ts: float
     matched_edges: list[str] = field(default_factory=list)
+    # Cumulative match confidence (tasks.md Backlog B.4): the running
+    # product of each matched step's MotifStep.match_score(). Always 1.0
+    # when MotifEngine isn't running in fuzzy mode, since every step there
+    # is required to match exactly (score 1.0).
+    confidence: float = 1.0
 
 
 class MotifStateStore(Protocol):
@@ -186,6 +192,10 @@ class RedisMotifStateStore:
         raw = self._client.hgetall(self._state_redis_key(motif_name, chain_key))
         if not raw:
             return None
+        # confidence (tasks.md Backlog B.4) defaults to 1.0 for states
+        # written before this field existed, so an older Redis record
+        # round-trips as an exact (non-fuzzy) match rather than erroring.
+        confidence_raw = raw.get(b"confidence", raw.get("confidence", 1.0))
         return MotifState(
             motif_name=motif_name,
             chain_key=chain_key,
@@ -193,6 +203,7 @@ class RedisMotifStateStore:
             started_at=float(raw[b"started_at"] if b"started_at" in raw else raw["started_at"]),
             last_edge_ts=float(raw[b"last_edge_ts"] if b"last_edge_ts" in raw else raw["last_edge_ts"]),
             matched_edges=json.loads(raw[b"matched_edges"] if b"matched_edges" in raw else raw["matched_edges"]),
+            confidence=float(confidence_raw),
         )
 
     def set(self, state: MotifState, ttl_seconds: float) -> None:
@@ -206,6 +217,7 @@ class RedisMotifStateStore:
                 "started_at": state.started_at,
                 "last_edge_ts": state.last_edge_ts,
                 "matched_edges": json.dumps(state.matched_edges),
+                "confidence": state.confidence,
             },
         )
         self._client.expire(state_key, ttl)
@@ -235,6 +247,47 @@ class RedisMotifStateStore:
         return result
 
 
+class ShardedMotifStateStore:
+    """Distributes motif state across N underlying `MotifStateStore`
+    instances (tasks.md Backlog B.5, proposal.docx §7's "distributing ...
+    the pattern cache across multiple nodes"). In a genuinely multi-node
+    deployment, `shards` would be N `RedisMotifStateStore`s each pointed at
+    a different Redis host/db; `InMemoryMotifStateStore` shards work the
+    same way for tests.
+
+    Routes by `chain_key` (via `stable_shard_index()`, sharding.py) since
+    `get`/`set`/`delete` already address state by `(motif_name, chain_key)`.
+    `states_containing_edge()` is the one operation that doesn't know its
+    target shard in advance -- an edge id doesn't encode which chain_key's
+    shard holds it -- so it fans out to every shard and merges, the same
+    scatter-gather tradeoff `ShardedActiveGraphStore`'s `neighbors()`/
+    `to_pyg_edge_index()` make (graph_store.py).
+    """
+
+    def __init__(self, shards: list) -> None:
+        if not shards:
+            raise ValueError("ShardedMotifStateStore needs at least one shard")
+        self.shards = shards
+
+    def _shard_for(self, chain_key: str) -> "MotifStateStore":
+        return self.shards[stable_shard_index(chain_key, len(self.shards))]
+
+    def get(self, motif_name: str, chain_key: str) -> Optional[MotifState]:
+        return self._shard_for(chain_key).get(motif_name, chain_key)
+
+    def set(self, state: MotifState, ttl_seconds: float) -> None:
+        self._shard_for(state.chain_key).set(state, ttl_seconds)
+
+    def delete(self, motif_name: str, chain_key: str) -> None:
+        self._shard_for(chain_key).delete(motif_name, chain_key)
+
+    def states_containing_edge(self, edge_id: str) -> list[MotifState]:
+        result: list[MotifState] = []
+        for shard in self.shards:
+            result.extend(shard.states_containing_edge(edge_id))
+        return result
+
+
 @dataclass
 class MotifCompletionEvent:
     """FR3.4: a high-confidence alert distinct from the statistical anomaly
@@ -244,6 +297,10 @@ class MotifCompletionEvent:
     chain_key: str
     matched_edges: list[str]
     completed_at: float
+    # Cumulative match confidence (tasks.md Backlog B.4) -- 1.0 unless
+    # MotifEngine was constructed with fuzzy=True and at least one matched
+    # step was a partial (not exact) match.
+    confidence: float = 1.0
 
 
 class MotifAlertBus:
@@ -297,7 +354,23 @@ class MotifResetBus:
 class MotifEngine:
     """Generic motif cache + delta-update engine, generalized over any
     `MotifDefinition` (FR3.1's "SHALL generalize to any operator-defined
-    motif")."""
+    motif").
+
+    `fuzzy`/`min_confidence` (tasks.md Backlog B.4, proposal.docx §7):
+    when `fuzzy=False` (the default), every step must match
+    `MotifStep.matches_shape()` exactly, identical to the engine's
+    original behavior -- `min_confidence` is irrelevant here since only
+    already-exact (confidence 1.0) chains ever reach the final stage.
+    When `fuzzy=True`, steps are matched via `MotifStep.match_score()`
+    instead: a structural-role mismatch (wrong `src_type`/`dst_type`, or
+    every specified `edge_type`/`protocol` missed) still rejects outright,
+    but a partial match on `edge_type`/`protocol` advances the chain with
+    a confidence penalty. A completion only fires once the chain's
+    cumulative confidence (the running product of each step's score)
+    clears `min_confidence` at the final stage -- otherwise the state is
+    dropped rather than left to complete on a later edge, since additional
+    steps can only ever decrease (never recover) that product.
+    """
 
     def __init__(
         self,
@@ -306,11 +379,15 @@ class MotifEngine:
         alert_bus: Optional[MotifAlertBus] = None,
         prune_event_bus: Optional[PruneEventBus] = None,
         reset_bus: Optional[MotifResetBus] = None,
+        fuzzy: bool = False,
+        min_confidence: float = 0.5,
     ) -> None:
         self.definitions = definitions
         self.state_store = state_store
         self.alert_bus = alert_bus or MotifAlertBus()
         self.reset_bus = reset_bus or MotifResetBus()
+        self.fuzzy = fuzzy
+        self.min_confidence = min_confidence
         self.available = True
         if prune_event_bus is not None:
             prune_event_bus.subscribe(self.on_prune)
@@ -324,9 +401,17 @@ class MotifEngine:
                 events.append(event)
         return events
 
+    def _step_score(self, step: MotifStep, edge: Edge) -> Optional[float]:
+        """1.0/None in exact mode (identical to the pre-B.4 behavior);
+        `MotifStep.match_score()`'s partial-credit score in fuzzy mode."""
+        if not self.fuzzy:
+            return 1.0 if step.matches_shape(edge) else None
+        return step.match_score(edge)
+
     def _try_start(self, definition: MotifDefinition, edge: Edge) -> None:
         step0 = definition.steps[0]
-        if not step0.matches_shape(edge):
+        score = self._step_score(step0, edge)
+        if score is None:
             return
         key = step0.candidate_key(edge)
         if key is None:
@@ -336,12 +421,15 @@ class MotifEngine:
         if definition.final_stage == 1:
             # A single-step "motif" completes immediately -- not used by the
             # current seed motifs, but a valid degenerate case of the schema.
+            if score < self.min_confidence:
+                return
             self.alert_bus.publish(
                 MotifCompletionEvent(
                     motif_name=definition.name,
                     chain_key=key,
                     matched_edges=[edge.edge_id],
                     completed_at=edge.t_e,
+                    confidence=score,
                 )
             )
             return
@@ -352,13 +440,15 @@ class MotifEngine:
             started_at=edge.t_e,
             last_edge_ts=edge.t_e,
             matched_edges=[edge.edge_id],
+            confidence=score,
         )
         self._state_set(state, ttl_seconds=definition.window_seconds)
 
     def _try_advance(self, definition: MotifDefinition, edge: Edge) -> Optional[MotifCompletionEvent]:
         for stage in range(1, definition.final_stage):
             step = definition.steps[stage]
-            if not step.matches_shape(edge):
+            score = self._step_score(step, edge)
+            if score is None:
                 continue
             key = step.candidate_key(edge)
             if key is None:
@@ -378,13 +468,26 @@ class MotifEngine:
 
             new_stage = stage + 1
             matched_edges = state.matched_edges + [edge.edge_id]
+            confidence = state.confidence * score
             if new_stage >= definition.final_stage:
                 self._state_delete(definition.name, key)
+                if confidence < self.min_confidence:
+                    # Fuzzy mode only (exact mode's score is always 1.0, so
+                    # this branch is unreachable there): structurally
+                    # completed, but too much accumulated protocol/edge-type
+                    # deviation to trust as a real match (tasks.md Backlog
+                    # B.4) -- dropped, not reported.
+                    logger.info(
+                        "motif %s candidate %s reached final stage but confidence %.3f < min_confidence %.3f; dropping",
+                        definition.name, key, confidence, self.min_confidence,
+                    )
+                    continue
                 event = MotifCompletionEvent(
                     motif_name=definition.name,
                     chain_key=key,
                     matched_edges=matched_edges,
                     completed_at=edge.t_e,
+                    confidence=confidence,
                 )
                 self.alert_bus.publish(event)
                 return event
@@ -396,6 +499,7 @@ class MotifEngine:
                 started_at=state.started_at,
                 last_edge_ts=edge.t_e,
                 matched_edges=matched_edges,
+                confidence=confidence,
             )
             self._state_set(advanced, ttl_seconds=definition.window_seconds)
             return None

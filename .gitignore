@@ -7,3 +7,5 @@ data/lanl/raw/*.gz
 !data/lanl/raw/sample_auth.txt.gz
 data/lanl/staged/
 data/lanl/simulated/
+data/mordor/staged/
+logs/
