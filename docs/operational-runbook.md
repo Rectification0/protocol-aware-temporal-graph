@@ -169,7 +169,7 @@ enqueues, so `run_once()` never blocks on Neo4j latency. Operator actions:
 
 Before real labeled enterprise traffic is available, `src/t_gnn/data/simulate_traffic.py`
 generates synthetic labeled traffic at whatever scale you need to exercise
-the pipeline/pilot harness locally:
+the pipeline/pilot harness locally. Bash:
 
 ```bash
 python -m t_gnn.data.simulate_traffic \
@@ -178,6 +178,18 @@ python -m t_gnn.data.simulate_traffic \
     [--events-per-user-per-day 3.0] \
     [--num-lateral-pivots 3] [--num-admin-share-escalations 3] [--num-anomalies 3] \
     [--seed 42]
+```
+
+PowerShell (`\` is not a line-continuation character there -- use `` ` ``,
+or put it all on one line):
+
+```powershell
+python -m t_gnn.data.simulate_traffic `
+    --output-dir data/lanl/simulated `
+    --num-users 200 --num-machines 50 --days 7 `
+    --events-per-user-per-day 3.0 `
+    --num-lateral-pivots 3 --num-admin-share-escalations 3 --num-anomalies 3 `
+    --seed 42
 ```
 
 This writes `data/lanl/simulated/staged/` (drop-in `--staged-dir` for the
@@ -199,7 +211,7 @@ decision (see the caveat below).
 
 `src/t_gnn/pilot.py` (tasks.md 7.3) computes false-positive/negative rates
 for both detection paths against labeled ground truth — either the
-simulated traffic above, or real staged/labeled data once available:
+simulated traffic above, or real staged/labeled data once available. Bash:
 
 ```bash
 python -m t_gnn.pilot \
@@ -207,6 +219,16 @@ python -m t_gnn.pilot \
     --redteam data/lanl/raw/redteam.txt \
     --epoch-start 1451606400 \
     [--z-threshold 3.0] [--output pilot-report.json]
+```
+
+PowerShell:
+
+```powershell
+python -m t_gnn.pilot `
+    --staged-dir data/lanl/staged `
+    --redteam data/lanl/raw/redteam.txt `
+    --epoch-start 1451606400 `
+    --z-threshold 3.0 --output pilot-report.json
 ```
 
 This replays staged edges through `DecayStreamProcessor`'s baseline path
@@ -228,3 +250,38 @@ truth, stage it (`stage_lanl.py` or your production ingestion adapter),
 run the command above, and only then decide on full rollout based on the
 resulting precision/recall against your organization's acceptable
 false-positive/negative thresholds.
+
+## Scoring entities with the live T-GNN model
+
+`pilot.py` above only evaluates the FR1.5 deviation-signal and FR3.4
+motif-completion paths — it never actually calls the PyTorch Geometric
+forward pass (`DynamicTGNN`/`TGNNInferenceEngine`, Phase 5). `src/t_gnn/score_entities.py`
+(tasks.md 8.1) fills that gap: it replays staged edges through the same
+real pipeline stages, then prints each entity's live model score, sorted
+by score magnitude (most anomalous first). Bash:
+
+```bash
+python -m t_gnn.score_entities \
+    --staged-dir data/lanl/staged \
+    [--top 20] [--output scores.json]
+```
+
+PowerShell:
+
+```powershell
+python -m t_gnn.score_entities `
+    --staged-dir data/lanl/staged `
+    --top 20 --output scores.json
+```
+
+Each result is `{entity_id, score, t, trigger, motif_name}` — `trigger`
+is `"scheduled"` for the final full-graph pass this CLI runs, or
+`"motif_completion"` for any entity whose score was produced by the 5.3
+fast path firing *during* replay (i.e. a motif completed mid-stream and
+that neighborhood was scored immediately, same as it would be live). Per
+specs.md §4's non-goal, the underlying model is still the deliberately
+untrained reference network from Phase 5 — this tool surfaces its output,
+it does not make the model itself production-accurate. Treat scores as a
+way to inspect the integration (does scoring actually run against the
+live graph, does a motif completion actually trigger the fast path), not
+as calibrated anomaly probabilities.

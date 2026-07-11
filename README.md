@@ -12,14 +12,15 @@ configuration and day-to-day operation.
 
 ## Status
 
-All seven phases in `tasks.md` are implemented: Foundations
+All eight phases in `tasks.md` are implemented: Foundations
 (edge/protocol schema + ingestion adapters), Protocol-Aware Time-Decay
 (FR1), Dynamic Graph Pruning (FR2), Stateful Motif Caching (FR3), Cold
 Storage & Forensics (FR4), T-GNN Integration, Observability & Hardening,
-and Documentation & Rollout. See `tasks.md` for the per-task checklist —
-Phase 7's pilot-deployment task (7.3) ships a real, tested evaluation
-harness, but running an actual pilot against real labeled enterprise
-traffic remains an operational step outside what this repo can perform.
+Documentation & Rollout, and Tooling & Documentation Follow-ups. See
+`tasks.md` for the per-task checklist — Phase 7's pilot-deployment task
+(7.3) ships a real, tested evaluation harness, but running an actual
+pilot against real labeled enterprise traffic remains an operational step
+outside what this repo can perform.
 
 - `config/schema/edge.schema.json`, `config/schema/motif.schema.json` -- the edge and motif definition contracts.
 - `config/protocols.yaml`, `config/motifs.yaml` -- protocol decay constants and the seed motif library.
@@ -32,6 +33,7 @@ traffic remains an operational step outside what this repo can perform.
 - `src/t_gnn/audit.py`, `src/t_gnn/metrics.py` -- Phase 6: NFR5 audit logging for prune/motif-reset events, and a metrics collector for active graph size, prune/motif-hit/motif-reset rates, epsilon history, and inference latency.
 - `src/t_gnn/pilot.py` -- Phase 7: the pilot-evaluation harness (false-positive/negative rates for both detection paths against labeled ground truth) and its `python -m t_gnn.pilot` CLI.
 - `src/t_gnn/data/simulate_traffic.py` -- generates synthetic labeled traffic (background noise + injected motif/anomaly attacks) at a configurable scale, for exercising `pilot.py`/the detection pipeline locally beyond the tiny committed fixture -- still not a substitute for a real pilot against real enterprise traffic.
+- `src/t_gnn/score_entities.py` -- Phase 8: replays staged edges through the real decay/baseline/motif pipeline into the live T-GNN (`TGNNInferenceEngine`, Phase 5) and prints per-entity scores via its `python -m t_gnn.score_entities` CLI -- the piece `pilot.py` never exercises on its own.
 - `src/t_gnn/ingestion/sysmon_adapter.py`, `src/t_gnn/data/stage_lanl.py` -- the two reference ingestion adapters (Sysmon and offline LANL replay).
 
 ## Local dev environment

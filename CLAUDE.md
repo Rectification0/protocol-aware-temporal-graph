@@ -17,8 +17,9 @@ the source of truth and should be read before implementing any new phase:
 Phase 0 (Foundations), Phase 1 (Protocol-Aware Asymmetric Time-Decay),
 Phase 2 (Dynamic Graph Pruning), Phase 3 (Stateful Motif Caching), Phase 4
 (Cold Storage & Forensics), Phase 5 (T-GNN Integration), Phase 6
-(Observability & Hardening), and Phase 7 (Documentation & Rollout) are
-implemented so far — this is every phase in `tasks.md`. Phase 1 is
+(Observability & Hardening), Phase 7 (Documentation & Rollout), and Phase 8
+(Tooling & Documentation Follow-ups) are implemented so far — this is
+every phase in `tasks.md`. Phase 1 is
 pure-Python/staging (see the Architecture section for what each module
 stands in for and why). Phase 2 is a mix: the Active Graph Store and
 Pruning Watcher are framework-agnostic Python (no live Flink job), but its
@@ -53,9 +54,13 @@ phase in this repo can actually perform, the same acquisition gap task
 0.4 documents for the underlying LANL dataset.
 `docker-compose.yml`'s Flink/Redis/Neo4j stack is running locally (brought
 up ahead of schedule, before Phase 2 started, at the developer's request)
-— see "Local dev database" below. Every phase in `tasks.md` now has code
-(with 7.3's operational caveat above); further work is enhancement/
-extension of what exists (e.g. the Backlog items), not a new phase.
+— see "Local dev database" below. Phase 8 (Tooling & Documentation
+Follow-ups) adds a small real CLI (`src/t_gnn/score_entities.py`) plus a
+PowerShell doc fix, both discovered as gaps while using the CLIs Phase 7
+shipped — see the Architecture section's Phase 8 bullet. Every phase in
+`tasks.md` now has code (with 7.3's operational caveat above); further
+work is enhancement/extension of what exists (e.g. the remaining Open
+Questions), not a new phase.
 
 ## End-of-phase checklist
 
@@ -97,6 +102,7 @@ python -m t_gnn.data.stage_lanl --input <auth.txt.gz> --output <dir>   # stage L
 python -m t_gnn.data.calibrate_decay --staged-dir <dir> [--output report.json]   # suggest lambda_p per protocol from staged edges
 python -m t_gnn.data.simulate_traffic --output-dir <dir> [--num-users 200] [--num-machines 50] [--days 7] [--seed 42]   # generate synthetic labeled traffic for pilot.py
 python -m t_gnn.pilot --staged-dir <dir> --redteam <redteam.txt> [--z-threshold 3.0] [--output report.json]   # false-positive/negative rates vs. labeled ground truth
+python -m t_gnn.score_entities --staged-dir <dir> [--top 20] [--output scores.json]   # replay staged edges and print live T-GNN per-entity scores
 docker compose up -d                     # bring up Flink/Redis/Neo4j (needed for the Neo4j and Redis integration tests)
 ```
 
@@ -227,3 +233,8 @@ by the rest of the suite:
 - `docs/configuration-reference.md` (tasks.md 7.1) and `docs/operational-runbook.md` (tasks.md 7.2) are real, complete reference/procedure docs covering every config surface and operational workflow introduced across Phases 0-6 — not placeholders. Per the End-of-phase checklist above, keep both current whenever a future phase adds or changes a config surface or operational procedure; they're "non-planning docs" in the same sense `README.md` is, just organized by topic instead of by project overview.
 - `src/t_gnn/pilot.py` (`RedTeamLabel`, `load_redteam_labels()`, `evaluate_anomaly_detection()`, `evaluate_motif_detection()`, `run_pilot()`, plus a `python -m t_gnn.pilot` CLI mirroring `calibrate_decay.py`'s) — tasks.md 7.3: a real, tested harness computing true/false positive/negative rates for both detection paths (FR1.5 deviation signals vs. FR3.4 motif completions) against LANL `redteam.txt`-format ground truth. `evaluate_motif_detection()`'s candidate match is `{Machine:source_computer, Machine:destination_computer, User:user}` against a completion's `chain_key`, covering both seed motifs' chain-key shapes (`lateral_pivot`'s is a Machine, `admin_share_escalation`'s is a service-account User) rather than assuming one. `data/lanl/raw/sample_redteam.txt` is the matching tiny synthetic label fixture for `data/lanl/raw/sample_auth.txt.gz` (same relationship task 0.4's sample fixture already has to the real dataset); `tests/test_pilot.py`'s end-to-end smoke test asserts the *correct* miss (a false negative, not a fabricated detection) given that fixture's tiny size — same honesty standard `calibrate_decay.py`'s own smoke test holds itself to. Running an actual pilot against real labeled enterprise traffic, and using the result for a rollout decision, is the operational step this module's own docstring says the repo can't perform.
 - `src/t_gnn/data/simulate_traffic.py` (`generate_background_traffic()`, `inject_lateral_pivot()`, `inject_admin_share_escalation()`, `inject_low_and_slow_anomaly()`, `simulate()`, `write_staged_shards()`, `write_redteam_labels()`, plus a `python -m t_gnn.data.simulate_traffic` CLI) — extends 7.3: generates synthetic labeled traffic at a configurable scale for exercising `pilot.py`/the detection pipeline locally, beyond what the tiny committed fixture can. Background traffic only ever produces `User`->`Machine` `Authentication` edges, so it can structurally never collide with either seed motif's shape (`lateral_pivot` needs `Machine`->`Machine`; `admin_share_escalation` needs `User`->`User` then `FileTransfer`) — every motif completion in a simulated run is therefore provably one of the injected attacks, not a false positive, which is what makes `tests/test_simulate_traffic.py`'s end-to-end assertions exact rather than approximate. Background w_0 is jittered (not a flat `1.0`) so `EWMABaseline` has nonzero variance per entity — without that, z-scores are `None` regardless of how extreme a later injected anomaly is (the same fix `tests/test_tgnn_e2e.py`'s 5.4 scenario needed). Operates on `Edge` objects directly rather than round-tripping through LANL's raw `auth.txt` text format, since that format's vocabulary can't express `FileTransfer`/`RemoteCodeExecution` edge types or a controllable `w_0` — both needed for two of the three injected scenarios. Still synthetic, not real enterprise traffic; see `docs/operational-runbook.md`'s "Running a pilot evaluation" for what this does and doesn't substitute for.
+
+**Phase 8 is tooling/documentation follow-ups discovered while using the CLIs Phase 7 shipped, not a new pipeline stage or FR:**
+
+- `src/t_gnn/score_entities.py` (`score_staged_edges()`, plus a `python -m t_gnn.score_entities` CLI mirroring `pilot.py`'s) — tasks.md 8.1: closes the gap that `pilot.py` (7.3) evaluates the FR1.5 deviation-signal and FR3.4 motif-completion paths against labeled ground truth but never actually invokes the PyTorch Geometric forward pass design.md §2.8 describes. `score_staged_edges()` replays staged edges through the same real `DecayStreamProcessor` (1.3-1.5) and `MotifEngine` (3.2-3.5) `pilot.py` already uses, upserting each into an `ActiveGraphStore` (2.1); `TGNNInferenceEngine` is wired to the same `MotifAlertBus` the `MotifEngine` publishes to, so a motif completion mid-replay drives its 5.3 fast path inline exactly as design.md §3's data flow (steps 5-7) describes, not just at the end. After replay, one final scheduled pass (5.1/5.2) scores every entity still in the graph, sorted by score magnitude (the untrained reference model's sign carries no fixed meaning per specs.md §4's non-goal — only relative magnitude does). No changes to `tgnn.py`'s engine or model; this is purely a new consumer of the existing Phase 5 integration.
+- `docs/operational-runbook.md`'s `simulate_traffic`/`pilot` command blocks (tasks.md 8.2) gained PowerShell-safe forms alongside the existing bash ones — Windows PowerShell doesn't accept bash's `\` line continuation, which had produced a misleading "module not found"/argparse-looking error that was actually a shell-syntax problem, not a packaging one.
