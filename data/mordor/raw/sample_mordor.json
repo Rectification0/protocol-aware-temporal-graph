@@ -1,9 +1,0 @@
-{"@timestamp": "2021-05-04T10:00:00.000Z", "Channel": "Microsoft-Windows-Sysmon/Operational", "EventID": 3, "Hostname": "WORKSTATION1.contoso.local", "DestinationHostname": "FILESERVER1.contoso.local", "DestinationIp": "10.0.0.5", "DestinationPort": "445"}
-{"@timestamp": "2021-05-04T10:05:00.000Z", "Channel": "Security", "EventID": 4624, "Hostname": "FILESERVER1.contoso.local", "TargetUserName": "alice", "LogonType": "10", "AuthenticationPackageName": "Negotiate"}
-{"@timestamp": "2021-05-04T10:10:00.000Z", "Channel": "Security", "EventID": 4769, "Hostname": "DC1.contoso.local", "TargetUserName": "svc-backup", "ServiceName": "krbtgt"}
-{"@timestamp": "2021-05-04T10:15:00.000Z", "Channel": "Security", "EventID": 5140, "Hostname": "FILESERVER1.contoso.local", "SubjectUserName": "svc-backup", "ShareName": "\\\\FILESERVER1\\admin$"}
-{"@timestamp": "2021-05-04T10:20:00.000Z", "Channel": "Microsoft-Windows-Sysmon/Operational", "EventID": 1, "Hostname": "FILESERVER1.contoso.local", "User": "CONTOSO\\svc-backup", "Image": "C:\\Windows\\System32\\cmd.exe", "ParentImage": "C:\\Windows\\psexesvc.exe", "CommandLine": "cmd.exe /c whoami"}
-{"@timestamp": "2021-05-04T10:25:00.000Z", "Channel": "Microsoft-Windows-Sysmon/Operational", "EventID": 11, "Hostname": "WORKSTATION1.contoso.local", "TargetFilename": "\\\\FILESERVER1\\admin$\\temp\\payload.exe"}
-{"@timestamp": "2021-05-04T10:30:00.000Z", "Channel": "Microsoft-Windows-Sysmon/Operational", "EventID": 22, "Hostname": "WORKSTATION1.contoso.local", "QueryName": "contoso.local"}
-{"@timestamp": "2021-05-04T10:35:00.000Z", "Channel": "Security", "EventID": 4625, "Hostname": "FILESERVER1.contoso.local", "LogonType": "3", "FailureReason": "Unknown user name or bad password"}
-this is not valid json at all

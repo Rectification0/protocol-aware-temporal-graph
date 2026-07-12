@@ -41,7 +41,8 @@ outside what this repo can perform.
 - `src/t_gnn/adaptive_calibration.py` -- Backlog B.3: continuous/online `λ_p` recalibration from a rolling window of live edges, reusing `calibrate_decay.py`'s median-gap heuristic instead of requiring a one-shot manual batch run.
 - `src/t_gnn/sharding.py`, plus `ShardedActiveGraphStore` (graph_store.py) and `ShardedMotifStateStore` (motif_engine.py) -- Backlog B.5: distributes the Active Graph Store and motif-state cache across N shards via a process-stable consistent hash.
 - `src/t_gnn/feedback.py` -- Backlog B.6: an analyst-feedback bus + priority tracker that turns true/false-positive dispositions of past motif completions into a per-motif priority score.
-- `src/t_gnn/data/stage_mordor.py` -- Backlog B.8: stages [OTRF/Security-Datasets](https://github.com/OTRF/Security-Datasets) ("Mordor") captures -- real Sysmon/Security event recordings of actual attack techniques -- into the shared edge schema, via `python -m t_gnn.data.stage_mordor`. See `data/mordor/README.md` for acquisition + the two small field bridges it needed on top of the existing `sysmon_adapter.py`.
+
+Backlog B.8 (a Mordor/OTRF-Security-Datasets ingestion adapter, `stage_mordor`) is implemented but kept on the separate `feature/mordor-ingestion` branch rather than merged here -- see that branch's `docs/cli-reference.md` for how to stage and replay a Mordor capture.
 
 ## Local dev environment
 
@@ -71,7 +72,7 @@ staged dataset:
 ```bash
 docker compose up -d
 python scripts/run_pipeline.py
-python scripts/run_pipeline.py --source replay --staged-dir data/mordor/staged
+python scripts/run_pipeline.py --source replay --staged-dir data/lanl/simulated/staged
 ```
 
 See **[`docs/cli-reference.md`](docs/cli-reference.md#run_pipeline-scriptsrun_pipelinepy)**

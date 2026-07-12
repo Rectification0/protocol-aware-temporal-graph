@@ -8,11 +8,12 @@ script's default `--source synthetic` substitutes a continuously-generated
 synthetic traffic stream (background authentication noise, reusing
 `simulate_traffic.py`'s generators, plus periodically injected attack
 scenarios). `--source replay --staged-dir <dir>` instead replays a real
-staged directory (`stage_lanl.py`/`simulate_traffic.py`/`stage_mordor.py`
-output, e.g. a real Mordor capture, Backlog B.8) in timestamp order,
-finite -- it stops once the staged edges are exhausted, rather than
-running until Ctrl+C. Either way, everything the traffic flows through is
-real, not staged:
+staged directory (`stage_lanl.py`/`simulate_traffic.py` output, or any
+other producer of the shared shard-*.jsonl format -- e.g. Backlog B.8's
+`stage_mordor.py` on the separate `feature/mordor-ingestion` branch) in
+timestamp order, finite -- it stops once the staged edges are exhausted,
+rather than running until Ctrl+C. Either way, everything the traffic
+flows through is real, not staged:
 
   - `DecayStreamProcessor` (1.3-1.5) -- real decay + EWMA baseline deviation.
   - `ActiveGraphStore`/`ShardedActiveGraphStore` (2.1) -- real in-memory graph.
@@ -40,7 +41,7 @@ Usage:
     python scripts/run_pipeline.py
     python scripts/run_pipeline.py --shards 3 --fuzzy --attack-every 20
     python scripts/run_pipeline.py --max-ticks 200   # finite synthetic run instead of Ctrl+C
-    python scripts/run_pipeline.py --source replay --staged-dir data/mordor/staged
+    python scripts/run_pipeline.py --source replay --staged-dir data/lanl/simulated/staged
 """
 
 from __future__ import annotations
@@ -158,10 +159,10 @@ def _synthetic_edge_stream(
 
 def _replay_edge_stream(staged_dir: Path) -> Iterator[Edge]:
     """Finite stream: replays a staged directory's edges in timestamp order
-    (Backlog B.8's `stage_mordor.py` output, `stage_lanl.py`, or
-    `simulate_traffic.py` -- any producer of the shared shard-*.jsonl
-    format). Ends once every staged edge has been yielded, rather than
-    running until Ctrl+C."""
+    (`stage_lanl.py`, `simulate_traffic.py`, or any other producer of the
+    shared shard-*.jsonl format -- e.g. Backlog B.8's `stage_mordor.py` on
+    the separate `feature/mordor-ingestion` branch). Ends once every staged
+    edge has been yielded, rather than running until Ctrl+C."""
     edges: list[Edge] = []
     for shard in sorted(Path(staged_dir).glob("shard-*.jsonl")):
         for line in shard.read_text(encoding="utf-8").splitlines():
