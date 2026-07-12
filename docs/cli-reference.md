@@ -7,6 +7,10 @@ procedures (tuning `λ_p`, adding motifs, responding to an outage), see
 surface (protocols.yaml, motifs.yaml, `.env`, etc.), see
 [`configuration-reference.md`](configuration-reference.md).
 
+This branch (`feature/mordor-ingestion`) additionally carries the Mordor
+ingestion adapter (`stage_mordor`, Backlog B.8) — it isn't on `main`. See
+the "Common tasks" Mordor entries below and [`stage_mordor`](#stage_mordor).
+
 ## Which tool do I need?
 
 | I want to... | Use |
@@ -47,7 +51,302 @@ against it, or generate synthetic traffic and replay it live through
 
 ---
 
-## `simulate_traffic`
+## Common tasks (cookbook)
+
+Full, copy-pasteable command sequences for the things people actually want
+to do with this repo, task by task. Steps that appear in more than one task
+(bringing the stack up, generating traffic) are repeated in full rather
+than cross-referenced — every block below can be pasted on its own and
+will work from a clean checkout.
+
+### Task: set up the local dev environment from scratch
+
+```bash
+cp .env.example .env       # then edit .env with your local credentials
+pip install -e ".[dev]"
+docker compose up -d       # Flink UI :8081, Neo4j :7474/7687, Redis :6379
+python scripts/init_postgres.py   # optional: only needed for Postgres-backed work
+pytest                     # confirm everything (including Neo4j/Redis integration tests) is green
+```
+
+```powershell
+Copy-Item .env.example .env       # then edit .env with your local credentials
+pip install -e ".[dev]"
+docker compose up -d               # Flink UI :8081, Neo4j :7474/7687, Redis :6379
+python scripts/init_postgres.py    # optional: only needed for Postgres-backed work
+pytest                             # confirm everything (including Neo4j/Redis integration tests) is green
+```
+
+### Task: generate simulated traffic and replay it live through the full pipeline
+
+This is the fastest way to see decay, pruning, motif detection, and T-GNN
+scoring all running together against real Neo4j/Redis.
+
+```bash
+docker compose up -d
+python -m t_gnn.data.simulate_traffic \
+    --output-dir data/lanl/simulated \
+    --num-users 200 --num-machines 50 --days 7
+python scripts/run_pipeline.py --source replay --staged-dir data/lanl/simulated/staged
+```
+
+```powershell
+docker compose up -d
+python -m t_gnn.data.simulate_traffic `
+    --output-dir data/lanl/simulated `
+    --num-users 200 --num-machines 50 --days 7
+python scripts/run_pipeline.py --source replay --staged-dir data/lanl/simulated/staged
+```
+
+Watch stdout for `[anomaly]`/`[prune]`/`[motif-alert]`/`[motif-reset]`
+lines and periodic metrics snapshots as the injected `lateral_pivot`,
+`admin_share_escalation`, and low-and-slow scenarios replay in timestamp
+order; the run stops on its own once every staged edge is exhausted.
+
+### Task: generate simulated traffic and check detection accuracy against ground truth
+
+```bash
+python -m t_gnn.data.simulate_traffic \
+    --output-dir data/lanl/simulated \
+    --num-users 200 --num-machines 50 --days 7
+python -m t_gnn.pilot \
+    --staged-dir data/lanl/simulated/staged \
+    --redteam data/lanl/simulated/redteam.txt \
+    --output pilot-report.json
+```
+
+```powershell
+python -m t_gnn.data.simulate_traffic `
+    --output-dir data/lanl/simulated `
+    --num-users 200 --num-machines 50 --days 7
+python -m t_gnn.pilot `
+    --staged-dir data/lanl/simulated/staged `
+    --redteam data/lanl/simulated/redteam.txt `
+    --output pilot-report.json
+```
+
+`simulate_traffic` writes both the staged shards and the matching
+`redteam.txt` labels in one shot, so this task never needs real data —
+`pilot-report.json` will show precision/recall for both the
+anomaly-deviation path and the motif-completion path.
+
+### Task: generate simulated traffic and inspect the live T-GNN's per-entity scores
+
+```bash
+python -m t_gnn.data.simulate_traffic \
+    --output-dir data/lanl/simulated \
+    --num-users 200 --num-machines 50 --days 7
+python -m t_gnn.score_entities \
+    --staged-dir data/lanl/simulated/staged \
+    --top 20 \
+    --output scores.json
+```
+
+```powershell
+python -m t_gnn.data.simulate_traffic `
+    --output-dir data/lanl/simulated `
+    --num-users 200 --num-machines 50 --days 7
+python -m t_gnn.score_entities `
+    --staged-dir data/lanl/simulated/staged `
+    --top 20 `
+    --output scores.json
+```
+
+Entities involved in an injected `lateral_pivot`/`admin_share_escalation`
+should surface near the top of `scores.json` once the motif's fast-path
+inference fires mid-replay — remember the underlying model is untrained
+(specs.md §4's non-goal), so only relative score magnitude is meaningful.
+
+### Task: generate simulated traffic and calibrate `λ_p` from it
+
+```bash
+python -m t_gnn.data.simulate_traffic \
+    --output-dir data/lanl/simulated \
+    --num-users 200 --num-machines 50 --days 7
+python -m t_gnn.data.calibrate_decay \
+    --staged-dir data/lanl/simulated/staged \
+    --output calibration-report.json
+```
+
+```powershell
+python -m t_gnn.data.simulate_traffic `
+    --output-dir data/lanl/simulated `
+    --num-users 200 --num-machines 50 --days 7
+python -m t_gnn.data.calibrate_decay `
+    --staged-dir data/lanl/simulated/staged `
+    --output calibration-report.json
+```
+
+Then, if `sufficient_data` is `true` for a protocol and you want to apply
+the suggestion, hand-edit `config/protocols.yaml`'s `half_life_hours` for
+that protocol — see `operational-runbook.md`'s "Tuning `λ_p`" for the
+full procedure, including how to `reload()` without a redeploy.
+
+### Task: run the full pipeline continuously against synthetic (non-staged) traffic
+
+No staging step needed — `run_pipeline`'s default `--source synthetic`
+generates its own traffic forever.
+
+```bash
+docker compose up -d
+python scripts/run_pipeline.py
+# Ctrl+C to stop, or bound it up front:
+python scripts/run_pipeline.py --max-ticks 200
+```
+
+```powershell
+docker compose up -d
+python scripts/run_pipeline.py
+# Ctrl+C to stop, or bound it up front:
+python scripts/run_pipeline.py --max-ticks 200
+```
+
+### Task: stage a real Mordor capture and replay it through the full pipeline
+
+Requires a downloaded [OTRF/Security-Datasets](https://github.com/OTRF/Security-Datasets)
+capture (`.zip` or `.json`) — see `data/mordor/README.md` for acquisition.
+Unlike `simulate_traffic`, this is real recorded attacker behavior, so
+there's no `redteam.txt` to generate — use `run_pipeline`/`score_entities`
+to inspect it, not `pilot`.
+
+```bash
+docker compose up -d
+python -m t_gnn.data.stage_mordor \
+    --input empire_psexec_dcerpc_tcp_svcctl.zip \
+    --output data/mordor/staged
+python scripts/run_pipeline.py --source replay --staged-dir data/mordor/staged
+```
+
+```powershell
+docker compose up -d
+python -m t_gnn.data.stage_mordor `
+    --input empire_psexec_dcerpc_tcp_svcctl.zip `
+    --output data/mordor/staged
+python scripts/run_pipeline.py --source replay --staged-dir data/mordor/staged
+```
+
+### Task: stage a real Mordor capture and inspect the live T-GNN's scores
+
+```bash
+python -m t_gnn.data.stage_mordor \
+    --input empire_psexec_dcerpc_tcp_svcctl.zip \
+    --output data/mordor/staged
+python -m t_gnn.score_entities \
+    --staged-dir data/mordor/staged \
+    --top 20 \
+    --output mordor-scores.json
+```
+
+```powershell
+python -m t_gnn.data.stage_mordor `
+    --input empire_psexec_dcerpc_tcp_svcctl.zip `
+    --output data/mordor/staged
+python -m t_gnn.score_entities `
+    --staged-dir data/mordor/staged `
+    --top 20 `
+    --output mordor-scores.json
+```
+
+Check the `stage_mordor` summary's `lines_unsupported` vs. `lines_skipped`
+counts first: `lines_unsupported` (most of a real capture — every event
+type the pipeline doesn't map to an edge) is expected and fine;
+`lines_skipped` (malformed/incomplete lines) should normally be `0` or
+near it.
+
+### Task: try the Mordor smoke-test fixture without downloading a real capture
+
+```bash
+python -m t_gnn.data.stage_mordor \
+    --input data/mordor/raw/sample_mordor.json \
+    --output data/mordor/staged-sample
+python -m t_gnn.score_entities --staged-dir data/mordor/staged-sample
+```
+
+```powershell
+python -m t_gnn.data.stage_mordor `
+    --input data/mordor/raw/sample_mordor.json `
+    --output data/mordor/staged-sample
+python -m t_gnn.score_entities --staged-dir data/mordor/staged-sample
+```
+
+This exercises the staging/parsing mechanism end to end against the tiny
+hand-built fixture in `data/mordor/raw/sample_mordor.json` — it is not a
+real attack capture, so don't read anything into the resulting scores
+beyond "the plumbing works."
+
+### Task: stage the real LANL dataset and evaluate detection accuracy
+
+Requires the real `auth.txt.gz`/`redteam.txt.gz` from the
+[LANL Comprehensive Cybersecurity dataset](https://csr.lanl.gov/data/cyber1/)
+— see `data/lanl/README.md` for acquisition.
+
+```bash
+python -m t_gnn.data.stage_lanl \
+    --input auth.txt.gz \
+    --output data/lanl/staged
+python -m t_gnn.pilot \
+    --staged-dir data/lanl/staged \
+    --redteam redteam.txt \
+    --output pilot-report.json
+```
+
+```powershell
+python -m t_gnn.data.stage_lanl `
+    --input auth.txt.gz `
+    --output data/lanl/staged
+python -m t_gnn.pilot `
+    --staged-dir data/lanl/staged `
+    --redteam redteam.txt `
+    --output pilot-report.json
+```
+
+### Task: try the LANL/pilot smoke-test fixtures without downloading the real dataset
+
+```bash
+python -m t_gnn.data.stage_lanl \
+    --input data/lanl/raw/sample_auth.txt.gz \
+    --output data/lanl/staged-sample
+python -m t_gnn.pilot \
+    --staged-dir data/lanl/staged-sample \
+    --redteam data/lanl/raw/sample_redteam.txt
+```
+
+```powershell
+python -m t_gnn.data.stage_lanl `
+    --input data/lanl/raw/sample_auth.txt.gz `
+    --output data/lanl/staged-sample
+python -m t_gnn.pilot `
+    --staged-dir data/lanl/staged-sample `
+    --redteam data/lanl/raw/sample_redteam.txt
+```
+
+Both fixtures are tiny by design — expect the pilot report to show a
+correct *miss* (a false negative), not a fabricated detection; see
+`tests/test_pilot.py` for the same assertion made as an automated test.
+
+### Task: use sharding and fuzzy motif matching together (Backlog B.4/B.5)
+
+```bash
+docker compose up -d
+python -m t_gnn.data.simulate_traffic --output-dir data/lanl/simulated
+python scripts/run_pipeline.py --source replay --staged-dir data/lanl/simulated/staged \
+    --shards 3 --fuzzy --min-confidence 0.6
+```
+
+```powershell
+docker compose up -d
+python -m t_gnn.data.simulate_traffic --output-dir data/lanl/simulated
+python scripts/run_pipeline.py --source replay --staged-dir data/lanl/simulated/staged `
+    --shards 3 --fuzzy --min-confidence 0.6
+```
+
+---
+
+## Tool reference
+
+Detailed flag-by-flag reference for every tool used above.
+
+### `simulate_traffic`
 
 Generates synthetic labeled enterprise traffic: benign
 `User`→`Machine` authentication noise, plus injected instances of both
@@ -91,7 +390,7 @@ python -m t_gnn.data.simulate_traffic `
 
 ---
 
-## `stage_lanl`
+### `stage_lanl`
 
 Stages the real [LANL Comprehensive Cybersecurity dataset](https://csr.lanl.gov/data/cyber1/)
 (`auth.txt.gz`) into the shared edge schema. The real multi-GB dataset
@@ -127,7 +426,7 @@ shards (source file hash, same counts).
 
 ---
 
-## `stage_mordor`
+### `stage_mordor`
 
 Stages a real [OTRF/Security-Datasets](https://github.com/OTRF/Security-Datasets)
 ("Mordor") capture — real Sysmon + Windows Security event recordings of
@@ -136,6 +435,9 @@ mapped to MITRE ATT&CK — into the shared edge schema. Unlike
 `simulate_traffic`, this is *real* recorded attacker behavior, not an
 invented scenario. See `data/mordor/README.md` for how this reuses
 `sysmon_adapter.py` with only two fields bridged.
+
+**This tool only exists on the `feature/mordor-ingestion` branch** — it
+isn't merged into `main`.
 
 **Module**: `t_gnn.data.stage_mordor`
 **Prerequisites**: a downloaded Mordor `.zip` or `.json` dataset file (see
@@ -171,7 +473,7 @@ use `score_entities`/`run_pipeline` to inspect it, not `pilot`.
 
 ---
 
-## `pilot`
+### `pilot`
 
 Computes true/false positive/negative rates for both detection paths —
 FR1.5's anomaly-deviation signal and FR3.4's motif-completion alert —
@@ -210,7 +512,7 @@ python -m t_gnn.pilot `
 
 ---
 
-## `score_entities`
+### `score_entities`
 
 Replays staged edges through the real decay/baseline/motif pipeline into
 the live T-GNN (`TGNNInferenceEngine`) and prints each entity's actual
@@ -219,8 +521,8 @@ evaluates the deviation/motif signals feeding the model, not the model's
 own output.
 
 **Module**: `t_gnn.score_entities`
-**Prerequisites**: a staged directory (from any of the three staging
-tools above).
+**Prerequisites**: a staged directory (from any of the staging tools
+above).
 
 ```bash
 python -m t_gnn.score_entities --staged-dir data/lanl/staged --top 20
@@ -244,7 +546,7 @@ probabilities.
 
 ---
 
-## `calibrate_decay`
+### `calibrate_decay`
 
 Derives a suggested `λ_p` per protocol from the median same-entity
 inter-arrival gap in staged traffic — a calibration *aid*, not an
@@ -277,7 +579,7 @@ sufficient_data}` per protocol.
 
 ---
 
-## `run_pipeline` (`scripts/run_pipeline.py`)
+### `run_pipeline` (`scripts/run_pipeline.py`)
 
 Wires every real component in this repo together into one long-running
 process — decay/baseline, the Active Graph Store, pruning to real Neo4j,
@@ -332,7 +634,7 @@ See `README.md`'s "Running the full pipeline live" for a fuller walkthrough.
 
 ---
 
-## `init_postgres` (`scripts/init_postgres.py`)
+### `init_postgres` (`scripts/init_postgres.py`)
 
 Idempotently creates the local dev Postgres database
 (`t_gnn_dev`) — not part of the detection pipeline itself; Postgres is
