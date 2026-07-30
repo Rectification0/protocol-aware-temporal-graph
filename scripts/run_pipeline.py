@@ -30,11 +30,19 @@ flows through is real, not staged:
     aggregation/logging of every event the above already emits.
   - `AdaptiveDecayCalibrator` (Backlog B.3), optional -- observes the same
     live edges and pushes recalibrated lambda_p values into the registry.
+  - `ApiStateWriter` (`api_state.py`, tasks.md F0), on by default (disable
+    with `--no-api-persist`) -- persists metrics snapshots, motif
+    completions/resets, and entity scores to Postgres, the bridge that lets
+    the separate, decoupled frontend API service (`t_gnn.api`) see this
+    process's live state without sharing memory with it. Degrades
+    gracefully (a warning, not a crash) if Postgres is unreachable.
 
 Not wired in here: `MotifPriorityTracker`/`MotifFeedbackBus` (Backlog B.6)
 -- that loop is inherently human-driven (an analyst's true/false-positive
 disposition of a past alert), so there's nothing for an unattended
-continuous demo to feed it automatically.
+continuous demo to feed it automatically. The frontend API service
+(`t_gnn.api`) exposes a feedback-submission endpoint (F9.5) for that
+human-driven path instead.
 
 Usage:
     docker compose up -d
@@ -62,6 +70,7 @@ import redis  # noqa: E402
 import t_gnn.db  # noqa: E402,F401 -- side effect: loads .env into os.environ
 
 from t_gnn.adaptive_calibration import AdaptiveDecayCalibrator  # noqa: E402
+from t_gnn.api_state import ApiStateWriter, create_api_tables  # noqa: E402
 from t_gnn.audit import AuditLogger, FileAuditSink  # noqa: E402
 from t_gnn.cold_storage import BufferedColdStorageWriter, Neo4jColdStorageWriter, Neo4jConfig  # noqa: E402
 from t_gnn.data.simulate_traffic import (  # noqa: E402
@@ -192,6 +201,9 @@ def main() -> None:
     parser.add_argument("--shards", type=int, default=1, help="use N shards for the graph store + motif cache (Backlog B.5); N=1 is the plain Phase 2/3 path")
     parser.add_argument("--adaptive-calibration", action="store_true", help="enable AdaptiveDecayCalibrator (Backlog B.3)")
     parser.add_argument("--audit-log", type=Path, default=Path("logs/audit.log"))
+    parser.add_argument("--no-api-persist", action="store_true",
+                         help="disable writing to the frontend API layer's Postgres tables (tasks.md F0) -- "
+                              "on by default, degrades gracefully (a warning, not a crash) if Postgres is unreachable")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-ticks", type=int, default=None, help="synthetic mode only: stop after N ticks instead of running until Ctrl+C")
     args = parser.parse_args()
@@ -273,6 +285,21 @@ def main() -> None:
     metrics = MetricsCollector(store=store, prune_bus=prune_bus, alert_bus=alert_bus, reset_bus=reset_bus)
     audit_logger = AuditLogger(sink=FileAuditSink(args.audit_log), prune_bus=prune_bus, reset_bus=reset_bus)
 
+    api_state_writer: Optional[ApiStateWriter] = None
+    if not args.no_api_persist:
+        try:
+            with t_gnn.db.get_connection() as conn:
+                create_api_tables(conn)
+            api_state_writer = ApiStateWriter(
+                t_gnn.db.get_connection, alert_bus=alert_bus, reset_bus=reset_bus,
+                result_bus=inference_engine.result_bus,
+            )
+            print("connected to Postgres (frontend API layer, tasks.md F0).")
+        except Exception as exc:
+            print(f"WARNING: could not reach Postgres ({exc}) -- frontend API history persistence "
+                  f"disabled for this run (run `python scripts/init_postgres.py` first if the database "
+                  f"itself doesn't exist yet).", file=sys.stderr)
+
     print(f"source={args.source} shards={args.shards} fuzzy={args.fuzzy} "
           f"adaptive_calibration={args.adaptive_calibration}")
     print(f"audit log: {args.audit_log}")
@@ -313,6 +340,8 @@ def main() -> None:
         metrics.observe_inference_pass(results, latency, t=t, trigger="scheduled")
 
         snap = metrics.snapshot(now=t)
+        if api_state_writer is not None:
+            api_state_writer.record_metrics_snapshot(snap, t=t)
         print(
             f"[t={t:.0f}] metrics: graph_size={snap.active_graph_size} "
             f"prune_rate={snap.prune_rate_per_second:.2f}/s epsilon={snap.epsilon:.4f} "
