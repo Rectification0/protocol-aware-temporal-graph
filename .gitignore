@@ -7,4 +7,18 @@ data/lanl/raw/*.gz
 !data/lanl/raw/sample_auth.txt.gz
 data/lanl/staged/
 data/lanl/simulated/
+data/mordor/
 logs/
+
+# Local Claude Code tooling (skills/config auto-installed into this repo's
+# .claude/ directory) -- editor/agent tooling config, not project source.
+.claude/
+
+# Generated CLI report/output artifacts -- pilot.py/score_entities.py/
+# calibrate_decay.py's --output has no fixed default, so these are just the
+# filenames used in local dev runs; root-anchored so they don't shadow any
+# same-named file nested under config/ or data/.
+/scores.json
+/pilot-report.json
+/calibration-report.json
+/mordor-scores.json

@@ -44,6 +44,8 @@ outside what this repo can perform.
 
 Backlog B.8 (a Mordor/OTRF-Security-Datasets ingestion adapter, `stage_mordor`) is implemented but kept on the separate `feature/mordor-ingestion` branch rather than merged here -- see that branch's `docs/cli-reference.md` for how to stage and replay a Mordor capture.
 
+**This branch (`frontend_implementation`) additionally carries a new React SOC dashboard frontend, not merged into `main`.** `tasks.md`'s "Frontend Implementation" section (Milestones F0-F17) is the roadmap; Milestone F0 (a backend API layer -- `src/t_gnn/api/`, `src/t_gnn/api_state.py` -- since this repo previously had no HTTP surface at all) is implemented. See `CLAUDE.md`'s frontend-status paragraph and Architecture-section addendum for what's real vs. deliberately deferred (F0.8/F0.10/F0.12-F0.14).
+
 ## Local dev environment
 
 ```bash

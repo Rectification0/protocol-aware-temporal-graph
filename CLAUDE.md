@@ -73,14 +73,45 @@ Every phase in `tasks.md` now has code (with 7.3's
 operational caveat above); further work is enhancement/extension of what
 exists (the remaining Backlog items and Open Questions), not a new phase.
 
-## End-of-phase checklist
+**Separately, the `frontend_implementation` branch (not merged into
+`main` — this repo's frontend work lives there, per the developer's
+explicit instruction not to commit/merge frontend work to `main`) tracks a
+new React SOC dashboard**, planned across Milestones F0-F17 in `tasks.md`'s
+"Frontend Implementation — React SOC Dashboard" section (that section only
+exists on this branch). Milestone F0 (the backend API layer the dashboard
+needs — this repo previously exposed its functionality only as a Python
+library plus CLIs, with no HTTP surface at all) is implemented: F0.1-F0.7,
+F0.9, and F0.15 are real, tested code; F0.11 (real login) is deliberately
+deferred in favor of the frontend's mock-auth bypass (tasks.md F3.4). Three
+things remain intentionally unstarted, not overlooked: F0.8 (an audit-log
+HTTP endpoint) is simply lower priority — it only feeds the Log Explorer, a
+later milestone — and its scope depends on an unresolved product question
+(does "view raw logs" mean the existing prune/reset audit trail, which is
+all this repo has, or the original raw ingested event, which this repo
+doesn't persist anywhere) that shouldn't be guessed at in code before
+someone decides; F0.10 (a WebSocket/SSE live-stream channel) is new
+plumbing with no existing analog to wrap, correctly sequenced after the
+read endpoints that do; F0.12-F0.14 are backend-data-model gaps with no
+existing concept to build against at all (a company-security-score
+formula, IP/device/session-history fields, geographic data) and are
+flagged rather than fabricated, per this task's own "don't invent
+endpoints that don't exist" instruction. See this branch's Architecture
+section addendum below for the technical detail, and `tasks.md`'s F0
+entries for the per-task status/reasoning in full.
 
-When every checkbox in a `tasks.md` phase is flipped to done, before moving on:
+## End-of-phase / end-of-milestone checklist
 
-1. **Update this file.** Revise the "only Phase N is implemented" line above,
-   extend the Architecture section with whatever new load-bearing
-   abstractions/conventions that phase introduced, and add any new commands.
-   Keep it a living doc, not a Phase-0 snapshot.
+When every checkbox in a `tasks.md` phase (Phase 0-8, Backlog items) **or
+a frontend Milestone (F0-F17, on the `frontend_implementation` branch)** is
+flipped to done, before moving on:
+
+1. **Update this file.** Revise the "only Phase N is implemented" line (or,
+   on `frontend_implementation`, the frontend-status paragraph above) to
+   reflect what's newly done and why anything adjacent was deliberately
+   skipped, extend the Architecture section with whatever new load-bearing
+   abstractions/conventions that phase/milestone introduced, and add any
+   new commands. Keep it a living doc, not a snapshot of whichever phase
+   was current when it was last touched.
 2. **Update `README.md` and any other non-planning docs** that describe
    current implementation status, layout, or setup/dev-environment
    instructions (e.g. a `docs/` folder, if one shows up later). These drift
@@ -92,14 +123,19 @@ When every checkbox in a `tasks.md` phase is flipped to done, before moving on:
    already has its own status-tracking mechanism (flip its checkboxes as
    tasks complete, per the Project section above) rather than needing prose
    updates here.
-3. **Re-check `.gitignore`.** Scan for anything the phase's work generates
-   that isn't already covered — new build/cache artifacts (e.g. a new
-   toolchain's equivalent of `*.egg-info/`), new local data/output
-   directories, new env/credential files — and add entries before committing.
-4. **Include all of the above in the phase's commit(s).** These doc/config
-   updates land in the same commit(s) as the phase's code, not a follow-up
-   commit — so `git log` never shows a phase "done" with its docs still
-   pointing at the previous phase's state.
+3. **Re-check `.gitignore`.** Scan for anything the phase's/milestone's
+   work generates that isn't already covered — new build/cache artifacts
+   (e.g. a new toolchain's equivalent of `*.egg-info/`; a frontend
+   milestone landing `frontend/` will eventually need its own
+   `node_modules/`/`dist/`/build-cache entries), new local data/output
+   directories, new env/credential files — and add entries before
+   committing. Do this even when the diff looks small; it's cheap and the
+   failure mode (a secret or a multi-hundred-MB directory landing in a
+   commit) isn't.
+4. **Include all of the above in the phase's/milestone's commit(s).** These
+   doc/config updates land in the same commit(s) as the phase's/milestone's
+   code, not a follow-up commit — so `git log` never shows a phase or
+   milestone "done" with its docs still pointing at the previous state.
 
 ## Commands
 
@@ -263,3 +299,10 @@ by the rest of the suite:
 - `src/t_gnn/feedback.py` (`MotifFeedbackEvent`, `MotifFeedbackBus`, `MotifPriorityTracker`) — B.6, proposal.docx §7's "integrating feedback from analyst investigations to refine which patterns are considered high priority over time." A new bus (mirroring `PruneEventBus`/`MotifAlertBus`/`MotifResetBus`'s in-process pub/sub convention) plus a subscriber that tracks per-motif true/false-positive counts from analyst dispositions of past `MotifCompletionEvent`s. `priority_score()` is a Laplace-smoothed true-positive rate (`(tp+1)/(tp+fp+2)`) so a motif with no feedback yet reads as a neutral 0.5 rather than an undefined ratio; `ranked_motifs()` surfaces which patterns are currently trusted most, ready for triage/reprioritization. No changes to `motif_engine.py`'s detection logic — this is a downstream consumer, the same relationship `audit.py`/`metrics.py` already have to their buses.
 
 **`scripts/run_pipeline.py`** is a separate, ad hoc addition (not a `tasks.md` item) requested to see the pipeline actually run continuously: it wires every real component above (decay/baseline, `ActiveGraphStore`/`ShardedActiveGraphStore`, `PruningWatcher` against real Neo4j, `MotifEngine` against real Redis with `--fuzzy`/`--shards` flags exercising B.4/B.5, `TGNNInferenceEngine`, `MetricsCollector`, `AuditLogger`, and optionally `AdaptiveDecayCalibrator` via `--adaptive-calibration`) into one long-running process. `--source synthetic` (default) feeds it a continuously-generated synthetic traffic stream since no live event source exists (B.1's gap); `--source replay --staged-dir <dir>` instead replays any staged directory (`stage_lanl.py`/`simulate_traffic.py` output, or — on the separate `feature/mordor-ingestion` branch — `stage_mordor.py` output, e.g. a real Mordor capture) through the same live components in timestamp order, finite rather than running until Ctrl+C. Both edge sources funnel into the same `_process_edge()`/periodic-metrics-pass logic. Verified running live against the real `docker compose up -d` stack in both modes, not just read — including, on the `feature/mordor-ingestion` branch, a real 229-edge Mordor capture replayed end-to-end with zero errors. Doesn't wire in `MotifPriorityTracker`/`MotifFeedbackBus` (B.6) since that loop is inherently human-driven. See README.md's "Running the full pipeline live" for usage.
+
+**Frontend Implementation (`frontend_implementation` branch): Milestone F0 — Backend API Layer.** Decided with the developer (2026-07-30): the API service is a **decoupled, stateless reader** — it never constructs `ActiveGraphStore`/`MotifEngine`/`TGNNInferenceEngine` itself, only reads what a separately-running pipeline process already persisted. FastAPI + uvicorn, chosen because it imports `src/t_gnn`'s existing modules directly with no cross-language bridge. Real auth (F0.11) deliberately deferred in favor of the frontend's mock-auth bypass.
+
+- `src/t_gnn/api_state.py` (`create_api_tables()`, `ApiStateWriter`, `ApiStateReader`) — the Postgres bridge between the two processes, reusing the previously-idle local `t_gnn_dev` database (see "Local dev database" above) rather than standing up a new one, per this repo's existing "use Postgres for persistence needs outside Neo4j/Redis's roles" guidance. New tables: `users` (created now, before real auth exists, so `motif_feedback`/`alert_acknowledgements` have a real foreign key to attribute to once login lands — `ApiStateWriter.get_or_create_user()` inserts a placeholder row keyed on whatever free-text analyst string the mock-auth frontend sends), `metrics_snapshots`, `entity_scores` (upserted, latest value per entity only — not a full history), `motif_completions`, `motif_resets`, `motif_feedback`, `alert_acknowledgements`. `ApiStateWriter` auto-subscribes to `MotifAlertBus`/`MotifResetBus`/`InferenceResultBus`/`MotifFeedbackBus` — the same auto-subscribe convention `audit.py`'s `AuditLogger` already uses — and degrades gracefully on a Postgres outage (`self.available` flips false, logged once, mirroring `motif_engine.py`'s Redis-outage handling, tasks.md 6.3) instead of crashing the pipeline process. `scripts/init_postgres.py` now calls `create_api_tables()` after ensuring the database exists (table creation was previously deferred here to "whichever future task first needs a table" — this is that task). `scripts/run_pipeline.py` constructs an `ApiStateWriter` by default (disable with `--no-api-persist`) and calls `record_metrics_snapshot()` alongside its existing `MetricsCollector.snapshot()` call.
+- `src/t_gnn/api/` (`app.py`'s `create_app()`, `deps.py`, `schemas.py`, `routers/`) — the FastAPI service itself: `metrics.py` (`GET /api/metrics/snapshot`), `scores.py` (`GET /api/scores/entities`, paginated/sorted by `abs(score)`), `motifs.py` (`GET`/`POST /api/motifs/completions`, `/resets`, `/feedback` — the `POST` is F9.5's analyst-disposition groundwork), `forensics.py` (`GET /api/forensics/entity/{id}`, `/edge/{id}`, a direct wrapper over the already-real `Neo4jForensicQueryAPI` — `deps.get_forensics_api()` raises a clean 503 instead of crashing the service if Neo4j isn't reachable), `config.py` (`GET /api/config/protocols`, `/motifs`, reading the real hot-reloadable registries directly with no Postgres dependency), `alerts.py` (`POST /api/alerts/ack`, F13.6's groundwork — keyed on `detection_type`+`detection_ref` rather than one unified alert id, since motif completions and anomaly-path detections don't share an id space), `health.py` (`GET /api/health`, checking Postgres/Neo4j/Redis reachability + staleness of the last recorded metrics snapshot). `app.py`'s exception handlers give every error the same `{"error": {"code": ..., "message": ...}}` envelope; `schemas.py`'s `Paginated[T]` (`items`/`limit`/`offset`/`total`) is the pagination envelope every list endpoint uses (offset-based — cursor-based was considered and rejected as unneeded at this scale/write-concurrency). `python -m t_gnn.api` runs it, mirroring this repo's other `python -m t_gnn.*` CLI convention.
+- `tests/test_api_state.py` (live-Postgres round-trips per table, skip-if-unreachable — same convention `test_cold_storage.py`/`test_forensics.py` use for Neo4j) and `tests/test_api.py` (HTTP-layer tests via FastAPI's `TestClient` + `app.dependency_overrides`, no live infra needed — an in-memory fake duck-typing both `ApiStateReader`'s and `ApiStateWriter`'s methods, the same relationship `InMemoryColdStorageWriter` has to `Neo4jColdStorageWriter`). Verified end-to-end against the real `docker compose up -d` stack and a real local Postgres: a live `scripts/run_pipeline.py` run (which detected a real `lateral_pivot` motif) followed by a separately-started `python -m t_gnn.api` process correctly serving that data back over HTTP, with zero shared memory between the two processes — confirming the decoupled architecture decision actually works, not just that its unit tests pass.
+- Not started: F0.8 (`GET /api/audit/log`, an HTTP wrapper over `audit.py`'s existing `logs/audit.log`), F0.10 (a WebSocket/SSE push channel for `MotifCompletionEvent`/`PrunedEdgeEvent`/`InferenceResult`), F0.12 (a "company cybersecurity score" formula/aggregation job), F0.13 (IP/device/session-history fields — would require a `config/schema/edge.schema.json` change, a cross-cutting change touching every ingestion adapter), F0.14 (geographic attack-map data, blocked on F0.13). See the Project section's frontend-status paragraph above for why each was deliberately deferred rather than overlooked.
