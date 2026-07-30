@@ -88,6 +88,224 @@ Gaps identified by cross-referencing the current code against `functionality.txt
 - [ ] B.7 Validate NFR1 (sub-millisecond inference latency) and NFR2 (billions of events/day throughput) against real enterprise-scale load, not proxy-scale synthetic load. *(`tests/test_load.py` is explicitly labeled a proxy-scale smoke test — e.g. `store.get()` stands in for a real inference read, and ingest volume is far below "billions of events/day." Blocked on the same real-traffic/real-infrastructure acquisition gap task 0.4 and 7.3 already document — no amount of local benchmarking substitutes for that, so this stays unchecked. Partial progress: tests/test_load.py gained two opt-in (`RUN_HEAVY_LOAD_TEST=1`, skipped by default so the normal suite stays fast) tests at ~25-100x the original smoke tests' scale (125k edges ingested / 200k edges resident vs. 4k/2k) -- still a local proxy, not enterprise-scale validation, but a meaningfully larger one than the default suite exercises.)*
 - [ ] B.8 Ingestion adapter for OTRF/Security-Datasets ("Mordor") — a public collection of real Sysmon + Windows Security event captures of actual attack techniques (not synthetic like `simulate_traffic.py`), identified while researching public datasets that could replace/supplement the tiny vendored LANL sample. *(Implemented (`src/t_gnn/data/stage_mordor.py` `stage()`/`normalize()`/`parse_mordor_stream()`, `data/mordor/`, `tests/test_stage_mordor.py`) and verified end-to-end against a real downloaded capture (`purplesharp_ad_playbook_I` — 229 real edges extracted from a 26k-line file, including the actual auth→exec lateral-movement sequence, run through the full decay/baseline/motif/T-GNN pipeline via `score_entities.py`), but kept on the `feature/mordor-ingestion` branch rather than merged into `main` at the developer's request — unchecked here because `main` itself doesn't carry this adapter. See that branch's `tasks.md`/`CLAUDE.md` for the full implementation notes.)*
 
+## Frontend Implementation — React SOC Dashboard
+
+Tracked on the `frontend_implementation` branch (not merged to `main`). Stack:
+**React + TypeScript + Vite** — nothing in this repo dictates a different
+frontend stack (no existing frontend code, no framework pinned in
+`specs.md`/`design.md`). State/data-fetching: TanStack Query for server-state
+caching (matches the "caching/retry/pagination" requirements below without
+hand-rolling them) + a lightweight client-state store (Zustand or React
+Context, decided in F1). Charting: pick one library in F1 (e.g. Recharts or
+visx) rather than mixing — see F12.
+
+**Ground truth this roadmap is built against**: this repo currently exposes
+its functionality *only* as a Python library (`src/t_gnn/*.py`) plus one-shot
+CLI tools (`docs/cli-reference.md`) that print to stdout or write flat
+artifacts (`scores.json`, `pilot-report.json`, `logs/audit.log`,
+newline-delimited) and a long-running-but-not-served process
+(`scripts/run_pipeline.py`, prints to stdout/log file, no socket). **There is
+no HTTP/WebSocket API server anywhere in the codebase today** (confirmed: no
+FastAPI/Flask/uvicorn/websockets dependency or code exists). There is also no
+authentication/user/session model, no IP-address or device field in the edge
+schema (`src/t_gnn/schema.py`'s `NODE_TYPES = ("User", "Machine")` only), no
+geographic/location data anywhere in `Edge`/`PrunedEdgeRecord`, and no
+persisted concept of an aggregate "company security score." Per this task's
+instructions, none of these are invented below — every task either cites the
+real module/CLI it will surface, or is explicitly marked **`[BACKEND TODO]`**
+for functionality that does not exist yet and needs a backend design
+decision before frontend work can consume it for real (a mock/fixture can
+unblock UI work in the meantime; see F0.9).
+
+### Milestone F0 — Backend API Layer (blocking prerequisite)
+
+Nothing downstream can show real data until this exists. Scope: a thin
+HTTP(+WebSocket) service that wraps the existing engine objects — it should
+not reimplement detection logic, only expose it.
+
+- [ ] F0.1 Decide and stand up the API framework/process model (e.g. FastAPI + uvicorn under `src/t_gnn/api/` or a sibling `backend_api/` package). Decide whether it hosts long-lived engine instances itself (`ActiveGraphStore`, `MetricsCollector`, `TGNNInferenceEngine`, etc., wired the same way `scripts/run_pipeline.py` already does) or attaches to a separately-running `run_pipeline.py` process via a shared store (Redis/Neo4j are already shared; in-process bus state like `MetricsCollector`/`AuditLogger` is not). *(Backing: `scripts/run_pipeline.py` is the only existing example of wiring these objects together long-running.)* — Complexity: L — Depends on: none.
+- [ ] F0.2 `GET /api/metrics/snapshot` — active graph size, prune rate, ε, motif hit/reset rate, latest inference latency. *(Backing: `src/t_gnn/metrics.py` `MetricsCollector.snapshot()` → `MetricsSnapshot`.)* — Complexity: S — Depends on: F0.1.
+- [ ] F0.3 `GET /api/scores/entities` — latest per-entity T-GNN scores, paginated/sortable by `abs(score)`. *(Backing: `src/t_gnn/score_entities.py` `score_staged_edges()` / `src/t_gnn/tgnn.py` `InferenceResult{entity_id, score, t, trigger, motif_name}` — the exact shape already dumped to `scores.json`.)* — Complexity: M — Depends on: F0.1.
+- [ ] F0.4 `GET /api/motifs/completions` (+ live stream variant, F0.10) — recent `MotifCompletionEvent`s: `motif_name, chain_key, matched_edges, completed_at, confidence`. *(Backing: `src/t_gnn/motif_engine.py` `MotifAlertBus`.)* — Complexity: M — Depends on: F0.1.
+- [ ] F0.5 `GET /api/motifs/resets` — recent `MotifResetEvent`s, for the Detection Matrix's reset/false-positive-adjacent signal. *(Backing: `MotifResetBus`.)* — Complexity: S — Depends on: F0.1.
+- [ ] F0.6 `GET /api/forensics/entity/{entity_id}?start=&end=` — reconstructed pruned-edge activity timeline for an entity. *(Backing: `src/t_gnn/forensics.py` `Neo4jForensicQueryAPI.reconstruct_activity()` → list of `PrunedEdgeRecord{edge_id, src, dst, edge_type, protocol, t_e, w_at_prune, pruned_at, source_system, raw_event_id}`.)* This is the real data source for User Investigation's "timeline of activity" and "log history" (F10) — there is no separate raw-log store. — Complexity: M — Depends on: F0.1.
+- [ ] F0.7 `GET /api/forensics/edge/{edge_id}` — single pruned-edge point lookup, for resolving a motif's `matched_edges` ids to full metadata. *(Backing: `Neo4jForensicQueryAPI.get_edge()`.)* — Complexity: S — Depends on: F0.1.
+- [ ] F0.8 `GET /api/audit/log?since=&type=` — tail/paginate the audit log (`type: prune | motif_reset` records) for the Log Explorer. *(Backing: `src/t_gnn/audit.py` `FileAuditSink` writing NDJSON to `logs/audit.log`.)* Note: this is prune/reset audit records, not raw Sysmon/Windows Event Log entries — the repo has no raw-log persistence layer; flag as a gap if "view raw logs" (per the Log Explorer requirement) means the original ingested event, not the audit trail. — Complexity: M — Depends on: F0.1.
+- [ ] F0.9 `GET /api/config/protocols` and `GET /api/config/motifs` — read-only surfacing of `config/protocols.yaml` (λ_p per protocol) and `config/motifs.yaml` (the motif library), for Settings (F15) and the Detection Matrix's "detection category" column. *(Backing: `src/t_gnn/protocol_registry.py` `ProtocolDecayRegistry`, `src/t_gnn/motifs.py` `MotifRegistry`.)* — Complexity: S — Depends on: F0.1.
+- [ ] F0.10 WebSocket (or SSE) channel streaming `MotifCompletionEvent`/`PrunedEdgeEvent`/`InferenceResult` as they occur, for Live Monitoring (F13). *(Backing: same buses as F0.2-F0.5; no existing push transport — this is new plumbing, not just a new consumer of an existing one.)* — Complexity: L — Depends on: F0.1, F0.4, F0.5.
+- [ ] F0.11 `[BACKEND TODO]` Authentication/authorization — no user/session/role model exists anywhere in this repo (it's a detection pipeline, not a multi-user service). Define: who are "users" of the dashboard (SOC analysts vs. admins), what they authenticate against (local user store? SSO/OIDC?), and what's authorized differently (e.g. who can acknowledge alerts (F13) or submit motif-feedback dispositions (`src/t_gnn/feedback.py` `MotifFeedbackBus` already exists for the latter — this task is the auth/identity wrapper around it, not the tracking logic itself)). — Complexity: L — Depends on: F0.1.
+- [ ] F0.12 `[BACKEND TODO]` "Company cybersecurity score" / overall security posture. No aggregate score is computed or persisted anywhere today — `specs.md`/`design.md`/`functionality.txt` don't define one. Before F6/F14 can show a real number, decide the formula (e.g. a weighted function of prune rate, motif hit rate, mean/max entity score magnitude, open-alert count from `MetricsSnapshot` + recent `InferenceResult`s) and where it's computed (new backend aggregation job vs. client-side derived metric — prefer backend, so the definition is centralized and auditable). — Complexity: M — Depends on: F0.2, F0.3.
+- [ ] F0.13 `[BACKEND TODO]` IP address / device / session-history fields. `Edge`'s node ids are `User:<name>` / `Machine:<name>` only (`schema.py` `NODE_TYPES`) — there is no IP, device-fingerprint, or session-id field anywhere in the edge or pruned-edge schema. If User Investigation (F10) must show these, this requires a schema change to `config/schema/edge.schema.json` + `Edge` (a cross-cutting change touching every ingestion adapter, not a frontend-only gap) — flag to backend/data-model owners rather than fabricating these fields in the API layer. — Complexity: M (decision) / L (if schema change approved) — Depends on: none.
+- [ ] F0.14 `[BACKEND TODO]` Geographic attack map data. No location/geo field exists in any data model in this repo. Either descope the "Geographic attack map" visualization (F12) or define where geo data would come from (e.g. IP geolocation, which itself depends on F0.13 first existing) — do not fabricate coordinates. — Complexity: S (decision) — Depends on: F0.13.
+- [ ] F0.15 API error/response conventions: consistent error envelope, pagination envelope (cursor or offset — pick one, apply everywhere F0.3/F0.4/F0.6/F0.8 paginate), and OpenAPI schema generation so the frontend can codegen types. — Complexity: M — Depends on: F0.1.
+
+### Milestone F1 — Project Setup
+
+- [ ] F1.1 Scaffold Vite + React + TypeScript app under `frontend/`. — Complexity: S — Depends on: none.
+- [ ] F1.2 Establish lint/format tooling (ESLint + Prettier) and commit hooks; note in root `README.md`'s Commands section once this exists (currently "no lint/format/build step configured" applies to the Python side only). — Complexity: S — Depends on: F1.1.
+- [ ] F1.3 Configure path aliases, environment variable handling (`VITE_API_BASE_URL`, etc.), and a `.env.example` for the frontend (mirroring the repo's existing `.env`/`.env.example` convention for the Python backend). — Complexity: S — Depends on: F1.1.
+- [ ] F1.4 Choose and install the charting library (F12 needs this decided first) and the client-state library (Zustand or Context+reducer). — Complexity: S — Depends on: F1.1.
+- [ ] F1.5 Set up TanStack Query (or equivalent) as the server-state layer used by F4. — Complexity: S — Depends on: F1.1.
+- [ ] F1.6 Base folder structure: `pages/`, `components/`, `features/`, `api/`, `hooks/`, `store/`, `types/`. — Complexity: S — Depends on: F1.1.
+- [ ] F1.7 CI: add a frontend build/lint/test job (new, since none exists today — the repo's only CI-relevant command today is `pytest`). — Complexity: M — Depends on: F1.1, F1.2.
+
+### Milestone F2 — Routing & App Shell
+
+- [ ] F2.1 Install/configure React Router; define top-level routes: `/`, `/analytics`, `/investigation/:entityId`, `/detections`, `/logs`, `/monitoring`, `/settings`, `/login`. — Complexity: S — Depends on: F1.1.
+- [ ] F2.2 App shell layout: Navbar + Sidebar + content outlet (components built in F5). — Complexity: M — Depends on: F1.6, F5.1, F5.2.
+- [ ] F2.3 Route-level code splitting (`React.lazy`/dynamic import per page). — Complexity: S — Depends on: F2.1.
+- [ ] F2.4 Protected-route wrapper gating on auth state (stubbed until F3/F0.11 land; behind a feature flag if backend auth isn't ready yet). — Complexity: S — Depends on: F3.1.
+- [ ] F2.5 404 / error-boundary route. — Complexity: S — Depends on: F2.1.
+
+### Milestone F3 — Authentication
+
+Blocked on `F0.11 [BACKEND TODO]` for anything beyond a stubbed/mocked login — do not build a real credential store client-side.
+
+- [ ] F3.1 Login page + auth state store (token/session in memory + refresh strategy — finalize once F0.11 defines the mechanism). — Complexity: M — Depends on: F0.11.
+- [ ] F3.2 Route guarding + redirect-to-login on 401 from the API client (F4.3). — Complexity: S — Depends on: F3.1, F4.3.
+- [ ] F3.3 Logout + session-expiry handling. — Complexity: S — Depends on: F3.1.
+- [ ] F3.4 Until F0.11 ships: build the entire app behind a mock-auth toggle (env-flag bypass) so F4-F15 aren't blocked waiting on backend auth design. — Complexity: S — Depends on: F1.3.
+
+### Milestone F4 — API Integration Layer
+
+- [ ] F4.1 Typed API client generated from F0.15's OpenAPI schema (or hand-written typed fetch wrappers if codegen is deferred). — Complexity: M — Depends on: F0.15.
+- [ ] F4.2 TanStack Query hooks per endpoint (`useMetricsSnapshot`, `useEntityScores`, `useMotifCompletions`, `useEntityForensics`, `useAuditLog`, `useProtocolConfig`, `useMotifConfig`) with sensible `staleTime`/`refetchInterval` per data's real update cadence (e.g. metrics snapshot polls; forensics/config are near-static). — Complexity: M — Depends on: F4.1, F0.2-F0.9.
+- [ ] F4.3 Centralized error handling (toast on failure via F5.12, 401 → redirect) and loading-state conventions consumed by F5's skeletons. — Complexity: S — Depends on: F4.1.
+- [ ] F4.4 Retry logic (TanStack Query's built-in retry/backoff, tuned per endpoint — e.g. don't retry a 404 on a specific entity). — Complexity: S — Depends on: F4.2.
+- [ ] F4.5 Pagination hooks matching F0.15's chosen pagination envelope, reused by F9 (Detection Matrix) and F11 (Log Explorer). — Complexity: S — Depends on: F4.1, F0.15.
+- [ ] F4.6 WebSocket/SSE client wrapper (connect, reconnect-with-backoff, message dispatch into TanStack Query cache updates or a dedicated live-event store) for F0.10, consumed by F13. — Complexity: L — Depends on: F0.10.
+
+### Milestone F5 — Reusable UI Component Library
+
+- [ ] F5.1 Navbar. — Complexity: S — Depends on: F1.4.
+- [ ] F5.2 Sidebar (nav links matching F2.1's routes). — Complexity: S — Depends on: F1.4.
+- [ ] F5.3 Dashboard card / stat-card components (used by F6, F14). — Complexity: S — Depends on: F1.4.
+- [ ] F5.4 Data table component with sort/pagination/row-selection (used by F9, F10, F11). — Complexity: M — Depends on: F1.4, F4.5.
+- [ ] F5.5 Chart wrapper components around the F1.4 charting library (line/time-series, bar, pie/donut, heatmap) — used by F12. — Complexity: M — Depends on: F1.4.
+- [ ] F5.6 Filter bar / filter-chip components (used by F8, F9, F11). — Complexity: S — Depends on: F1.4.
+- [ ] F5.7 Search bar (used by F11, F10's user list). — Complexity: S — Depends on: F1.4.
+- [ ] F5.8 Date-range picker supporting the F8 presets (last hour/24h/7d/30d) + custom range. — Complexity: M — Depends on: F1.4.
+- [ ] F5.9 Modal / dialog primitive. — Complexity: S — Depends on: F1.4.
+- [ ] F5.10 Alert banner (severity-colored, used by F13's critical alerts). — Complexity: S — Depends on: F1.4.
+- [ ] F5.11 Toast notification system. — Complexity: S — Depends on: F1.4.
+- [ ] F5.12 Loading skeletons (per component consuming F4's loading states). — Complexity: S — Depends on: F1.4.
+- [ ] F5.13 Empty-state components (no data / no results / feature-pending-backend states — used wherever an F0 `[BACKEND TODO]` isn't done yet, so the UI degrades honestly instead of showing fabricated data). — Complexity: S — Depends on: F1.4.
+- [ ] F5.14 Severity/status badges (threat severity, investigation status, false-positive marker — shared vocabulary across F9/F10/F11). — Complexity: S — Depends on: F1.4.
+
+### Milestone F6 — Executive Dashboard
+
+- [ ] F6.1 Company cybersecurity score tile. *(Depends on `[BACKEND TODO]` F0.12 — build behind F5.13's empty-state until that ships.)* — Complexity: S — Depends on: F0.12, F5.3.
+- [ ] F6.2 Overall security level indicator, derived from the same F0.12 aggregate or a simpler interim proxy (e.g. thresholded `MetricsSnapshot.motif_hit_rate_per_second` + latest max entity score) — document which if used as an interim. — Complexity: S — Depends on: F4.2.
+- [ ] F6.3 Threat status indicator (real-time-ish, from `MetricsSnapshot` + recent `MotifCompletionEvent` count). — Complexity: S — Depends on: F4.2.
+- [ ] F6.4 System health tile — process/pipeline liveness. *(Backing note: today "health" would mean "is `scripts/run_pipeline.py` running," which F0.1's process-model decision must expose, e.g. a `/api/health` endpoint hitting Redis/Neo4j connectivity + last-metrics-snapshot age.)* — Complexity: S — Depends on: F0.1.
+- [ ] F6.5 Active monitoring status (derived the same way as F6.4). — Complexity: S — Depends on: F6.4.
+- [ ] F6.6 Last analysis timestamp (`MetricsSnapshot`/latest `InferenceResult.t`). — Complexity: S — Depends on: F4.2.
+- [ ] F6.7 Assemble dashboard grid layout from F6.1-F6.6 + F5.3 cards. — Complexity: M — Depends on: F6.1-F6.6.
+
+### Milestone F7 — Threat Analytics
+
+- [ ] F7.1 Malicious / suspicious / benign user counts. *(Backing gap: there is no persisted per-user classification today — `InferenceResult.score` is a magnitude with no fixed sign meaning (specs.md §4 explicitly leaves the untrained reference model's output uninterpreted beyond relative magnitude) and no stored threshold buckets these into 3 tiers. Needs a `[BACKEND TODO]`-style decision: either bucket by score threshold (document the thresholds chosen, and that they're provisional given the model is untrained per CLAUDE.md's Phase 5 notes) or wait for a trained/calibrated model. Do not present these buckets as ground truth in the UI copy.)* — Complexity: M — Depends on: F4.2.
+- [ ] F7.2 Threat trends over time (time-series of motif completions + high-|score| entities, via F5.5 line chart). — Complexity: M — Depends on: F4.2, F5.5.
+- [ ] F7.3 Threat severity distribution (pie/bar via F5.5, bucketed the same way as F7.1 — same threshold-provisionality caveat). — Complexity: S — Depends on: F7.1, F5.5.
+- [ ] F7.4 Live attack counter (count of `MotifCompletionEvent`s in a rolling window, via F4.6's live stream). — Complexity: S — Depends on: F4.6.
+
+### Milestone F8 — Time-Based Analytics
+
+- [ ] F8.1 Time-range filter control (last hour / 24h / 7d / 30d / custom) using F5.8, applied as query params across F7/F9/F11's data hooks. — Complexity: M — Depends on: F5.8, F4.2.
+- [ ] F8.2 "Number of hackers detected" metric for the selected range. *(Same F7.1 classification caveat applies — this is a count of entities crossing whatever threshold F7.1 settles on, not an authoritative label.)* — Complexity: S — Depends on: F8.1, F7.1.
+- [ ] F8.3 "Number of attacks" metric (motif completions in range). — Complexity: S — Depends on: F8.1.
+- [ ] F8.4 Threat rate (attacks / time) and detection rate metrics — detection rate should be sourced from `src/t_gnn/pilot.py`'s real `precision`/`recall` figures where a pilot report exists (`pilot-report.json`'s shape), not invented; clearly label it as "last pilot evaluation," not live, since `pilot.py` is a batch tool, not a continuous one. — Complexity: M — Depends on: F0.9 (or a new `/api/pilot/latest-report` endpoint — add to F0 if pilot reports should be API-served rather than file-only). — 
+- [ ] F8.5 Average anomalies per hour (derived from `InferenceResult` volume/`DeviationSignal` counts over the selected range). — Complexity: S — Depends on: F8.1.
+
+### Milestone F9 — Detection Matrix
+
+- [ ] F9.1 Table columns: severity, confidence score, detection category, detection model, timestamp, source, status, false-positive marker, investigation status — using F5.4/F5.14. — Complexity: M — Depends on: F5.4, F5.14.
+- [ ] F9.2 Populate rows from `MotifCompletionEvent` (F0.4) — maps directly: `confidence` → confidence score, `motif_name` → detection category, `completed_at` → timestamp, `chain_key` → source. — Complexity: M — Depends on: F0.4, F9.1.
+- [ ] F9.3 Populate rows from anomaly-path detections (`InferenceResult` where `trigger == "scheduled"`/high `|score|`) so the matrix covers both detection paths (motif + T-GNN deviation), matching `pilot.py`'s own two-path evaluation split. — Complexity: M — Depends on: F0.3, F9.1.
+- [ ] F9.4 "Detection model" column values: `motif:<motif_name>` vs. `tgnn_deviation` — there is no other named model in this repo; don't invent additional model names. — Complexity: S — Depends on: F9.2, F9.3.
+- [ ] F9.5 False-positive marker + investigation status columns, writable via `src/t_gnn/feedback.py`'s `MotifFeedbackBus`/analyst disposition (`true_positive`/`false_positive`) — this is real backend logic already, just needs an API surface (`POST /api/motifs/{completion_id}/feedback` — add to F0). — Complexity: M — Depends on: F0.11 (needs an `analyst` identity to attribute the disposition to, per `MotifFeedbackEvent.analyst`).
+- [ ] F9.6 Filtering (by severity/status/category) and sorting. — Complexity: M — Depends on: F9.1, F5.6.
+
+### Milestone F10 — User Investigation
+
+- [ ] F10.1 User list page (all `User:*` entities seen — needs a new `/api/entities?type=User` listing endpoint; add to F0, backed by `ActiveGraphStore`'s known node ids or a Neo4j distinct-entity query). — Complexity: M — Depends on: F0.1.
+- [ ] F10.2 User detail page shell + routing (`/investigation/:entityId`). — Complexity: S — Depends on: F2.1, F10.1.
+- [ ] F10.3 Risk score display — reuses F0.3's `InferenceResult.score` for that entity; same provisional-interpretation caveat as F7.1. — Complexity: S — Depends on: F0.3.
+- [ ] F10.4 Timeline of activity — `src/t_gnn/forensics.py`'s `reconstruct_activity()` via F0.6; this is real, already-designed-for-this-exact-purpose data (design.md §2.7's "reconstruct activity in a time window"). — Complexity: M — Depends on: F0.6.
+- [ ] F10.5 Triggered rules — motif completions/deviation signals where this entity is the `chain_key`/`edge.src`, from F0.4/F0.3. — Complexity: M — Depends on: F0.3, F0.4.
+- [ ] F10.6 Log history — same data as F10.4 (there is no separate raw-log store per entity beyond pruned-edge cold storage) — don't build a second, different-looking "log history" panel that implies a different data source than the timeline. — Complexity: S — Depends on: F10.4.
+- [ ] F10.7 `[BACKEND TODO]` IP addresses panel — blocked on F0.13; build behind F5.13's empty-state until/unless that schema gap is resolved. — Complexity: S — Depends on: F0.13.
+- [ ] F10.8 `[BACKEND TODO]` Devices panel — same blocker as F10.7 (no device field in the schema). — Complexity: S — Depends on: F0.13.
+- [ ] F10.9 `[BACKEND TODO]` Session history panel — no session concept exists in `Edge`/`PrunedEdgeRecord`; would need to be derived (e.g. contiguous-activity windowing over F10.4's timeline) or backed by a new field — decide which before building; don't fabricate session boundaries silently. — Complexity: M — Depends on: F0.13.
+
+### Milestone F11 — Log Explorer
+
+- [ ] F11.1 Search logs — full-text/field search over F0.8's audit-log records (prune/motif-reset events); clarify in UI copy that this is the *audit trail*, not raw ingested Sysmon/Windows events (no raw-event store exists — `raw_event_id` is carried through `Edge`/`PrunedEdgeRecord` as an opaque reference back to a source system this repo doesn't itself store). — Complexity: M — Depends on: F0.8.
+- [ ] F11.2 Filter logs (by type/time-range/entity) using F5.6/F8.1. — Complexity: M — Depends on: F11.1, F5.6.
+- [ ] F11.3 View raw log entry (the full NDJSON record F0.8 returns, pretty-printed). — Complexity: S — Depends on: F11.1.
+- [ ] F11.4 Highlight malicious events (motif-reset / high-severity prune records styled via F5.14). — Complexity: S — Depends on: F11.1, F5.14.
+- [ ] F11.5 Export filtered logs (CSV/JSON download of the current filtered view). — Complexity: S — Depends on: F11.2.
+- [ ] F11.6 Pagination via F4.5/F5.4. — Complexity: S — Depends on: F4.5, F5.4.
+- [ ] F11.7 Live updates via F4.6's stream, appended to the top of the table with clear "new" affordance rather than silently reordering under the user. — Complexity: M — Depends on: F4.6, F11.1.
+
+### Milestone F12 — Analytics Visualizations
+
+- [ ] F12.1 Threat timeline chart. — Complexity: S — Depends on: F5.5, F7.2.
+- [ ] F12.2 Attacks-per-day chart. — Complexity: S — Depends on: F5.5, F8.3.
+- [ ] F12.3 Detection accuracy chart — sourced from `pilot.py`'s real precision/recall (F8.4's endpoint), explicitly labeled as "as of last pilot run" rather than live, matching what the data actually represents. — Complexity: S — Depends on: F8.4.
+- [ ] F12.4 Severity pie chart — same F7.1 threshold caveat. — Complexity: S — Depends on: F7.3.
+- [ ] F12.5 `[BACKEND TODO]` Geographic attack map — blocked on F0.14; descope or stub with an explicit "no location data available" state (F5.13) rather than a placeholder map with fake pins. — Complexity: S (stub) / L (real, pending F0.14) — Depends on: F0.14.
+- [ ] F12.6 Heatmap of attack frequency (time-of-day × day-of-week over motif completions/anomalies — real data, no backend gap). — Complexity: M — Depends on: F5.5, F0.4.
+- [ ] F12.7 Top targeted resources chart (most-frequently-`dst`-appearing `Machine:*` entities in recent detections). — Complexity: M — Depends on: F0.4, F0.3.
+- [ ] F12.8 Most common attack patterns chart (motif-completion counts grouped by `motif_name`, i.e. `config/motifs.yaml`'s library — currently just `admin_share_escalation`/`lateral_pivot`; chart should scale automatically as the motif library grows per tasks.md's Open Questions item on the full motif library). — Complexity: S — Depends on: F0.4.
+
+### Milestone F13 — Live Monitoring
+
+- [ ] F13.1 Real-time updates wiring via F4.6 across F6/F7/F9's live tiles. — Complexity: M — Depends on: F4.6.
+- [ ] F13.2 Live event stream panel (raw feed of incoming `MotifCompletionEvent`/`PrunedEdgeEvent`/`InferenceResult`). — Complexity: M — Depends on: F4.6.
+- [ ] F13.3 Auto-refresh toggle + interval control (client-side polling fallback for endpoints not on the F0.10 stream, e.g. F0.2's metrics snapshot). — Complexity: S — Depends on: F4.2.
+- [ ] F13.4 Notification panel (recent alerts, unread count). — Complexity: M — Depends on: F13.2, F5.11.
+- [ ] F13.5 Critical alerts (severity-filtered subset of F13.2, using F5.10's banner). — Complexity: S — Depends on: F13.2, F5.10.
+- [ ] F13.6 Alert acknowledgement — persists an ack state per detection. *(Backend gap: no ack/disposition-beyond-feedback field exists on completions today; extend F9.5's feedback endpoint or add a dedicated `POST /api/alerts/{id}/ack` to F0 rather than faking it client-side-only, since an ack that resets on page reload isn't useful for a SOC workflow.)* — Complexity: M — Depends on: F0.11.
+
+### Milestone F14 — Company Security Overview
+
+Largely a second view over F6/F0.12's data at a different altitude (company-wide rollup vs. per-tile) — reuse F6's hooks rather than duplicating fetch logic.
+
+- [ ] F14.1 Overall security posture + threat level (reuse F6.1/F6.2). — Complexity: S — Depends on: F6.1, F6.2.
+- [ ] F14.2 Detection engine status + response status (reuse F6.4/F6.5; "response status" has no backend concept today beyond "is the pipeline running" — don't imply an automated-response/SOAR capability, which specs.md §4 explicitly excludes as a non-goal). — Complexity: S — Depends on: F6.4.
+- [ ] F14.3 Number of monitored users / analyzed sessions / total processed logs. *(Backend gap: "sessions" isn't a modeled concept (see F10.9); "monitored users" can come from F10.1's entity listing; "processed logs" can come from a cumulative counter — check whether `MetricsCollector` needs a new lifetime-counter field, since `RollingRateCounter` today is rate-only, not cumulative — add to F0 if so.)* — Complexity: M — Depends on: F10.1, F0.2.
+- [ ] F14.4 Average response time — no such timing is currently measured anywhere (inference latency is measured; "response" in the SOAR/analyst-action sense is not). Define what this measures (time-to-detection from `t_e` to `completed_at`/`t`? analyst ack latency from F13.6?) before implementing — likely a new `[BACKEND TODO]`. — Complexity: M — Depends on: F13.6.
+
+### Milestone F15 — Settings
+
+- [ ] F15.1 Theme setting (ties into F16.2's dark mode). — Complexity: S — Depends on: F1.4.
+- [ ] F15.2 Notification settings (which alert types/severities trigger F13.4's panel/toasts). — Complexity: S — Depends on: F13.4.
+- [ ] F15.3 API configuration (base URL / environment — mostly relevant for local dev / pointing at a different backend instance). — Complexity: S — Depends on: F1.3.
+- [ ] F15.4 Refresh interval setting, feeding F13.3. — Complexity: S — Depends on: F13.3.
+- [ ] F15.5 Alert thresholds — read-only display of `config/protocols.yaml`/`config/motifs.yaml` via F0.9 to start; a write-path (edit λ_p / motif window from the UI) is a separate, larger `[BACKEND TODO]` since today those are hand-edited YAML + `ProtocolDecayRegistry.reload()`/`MotifRegistry.reload()` (see `docs/operational-runbook.md`) — scope read-only first, flag the write-path as a follow-up milestone rather than building it speculatively. — Complexity: M (read-only) / L (editable) — Depends on: F0.9.
+- [ ] F15.6 User preferences (persisted client-side, e.g. localStorage, until F0.11's auth/user model exists to persist server-side). — Complexity: S — Depends on: F1.4.
+
+### Milestone F16 — Quality, Accessibility & Testing
+
+- [ ] F16.1 Responsive design pass across all pages (mobile/tablet breakpoints for the dashboard grid, tables, charts). — Complexity: M — Depends on: F6-F14 substantially complete.
+- [ ] F16.2 Dark mode (design-token-driven, per F15.1). — Complexity: M — Depends on: F1.4.
+- [ ] F16.3 Accessibility pass (keyboard nav, ARIA labels on charts/tables/alerts, color-contrast check on severity badges (F5.14) since severity coloring can't be the only signal). — Complexity: M — Depends on: F5 components complete.
+- [ ] F16.4 Unit tests (components, hooks) — establish the frontend's test runner/convention now (nothing exists yet; don't retrofit at the end). — Complexity: M — Depends on: F1.1.
+- [ ] F16.5 Integration tests (page-level, mocking F4's API layer). — Complexity: M — Depends on: F16.4.
+- [ ] F16.6 Performance optimization pass (bundle size, memoization on high-frequency live-updating components from F13). — Complexity: M — Depends on: F13 complete.
+- [ ] F16.7 Code splitting verification (confirm F2.3's route-level splitting is actually reducing initial bundle). — Complexity: S — Depends on: F2.3.
+- [ ] F16.8 Lazy loading for below-the-fold/heavy components (charts, tables with large datasets). — Complexity: S — Depends on: F5.4, F5.5.
+- [ ] F16.9 Error boundaries per major page/section so one panel's failure (e.g. a `[BACKEND TODO]` endpoint that 404s) doesn't blank the whole dashboard — pairs with F5.13's empty states. — Complexity: S — Depends on: F2.5, F5.13.
+
+### Milestone F17 — Deployment
+
+- [ ] F17.1 Production build pipeline (Vite build, env-specific config injection). — Complexity: S — Depends on: F1.3.
+- [ ] F17.2 Containerize the frontend (Dockerfile) and add it as a service in `docker-compose.yml` alongside Flink/Redis/Neo4j, so `docker compose up -d` can optionally bring up the dashboard too. — Complexity: M — Depends on: F17.1, F0.1 (the API service also needs a compose entry).
+- [ ] F17.3 Reverse-proxy/CORS configuration between the frontend origin and F0's API. — Complexity: S — Depends on: F17.2.
+- [ ] F17.4 CI deployment job (build + push image / static deploy, per F1.7's CI). — Complexity: M — Depends on: F1.7, F17.2.
+- [ ] F17.5 Update `README.md` and `docs/cli-reference.md`-adjacent docs (a new `docs/frontend-reference.md`?) with dashboard setup/run instructions once F1-F2 land, per this repo's existing convention of keeping non-planning docs current with what's implemented (see `CLAUDE.md`'s "End-of-phase checklist" — the same discipline applies here even though this isn't a numbered backend phase). — Complexity: S — Depends on: F17.1.
+
 ## Open Questions (tracked, not yet actionable)
 
 - [ ] Determine full initial motif library beyond the seed example (see specs.md §8).
