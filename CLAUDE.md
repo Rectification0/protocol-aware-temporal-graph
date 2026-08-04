@@ -80,24 +80,129 @@ new React SOC dashboard**, planned across Milestones F0-F17 in `tasks.md`'s
 "Frontend Implementation — React SOC Dashboard" section (that section only
 exists on this branch). Milestone F0 (the backend API layer the dashboard
 needs — this repo previously exposed its functionality only as a Python
-library plus CLIs, with no HTTP surface at all) is implemented: F0.1-F0.7,
-F0.9, and F0.15 are real, tested code; F0.11 (real login) is deliberately
-deferred in favor of the frontend's mock-auth bypass (tasks.md F3.4). Three
-things remain intentionally unstarted, not overlooked: F0.8 (an audit-log
-HTTP endpoint) is simply lower priority — it only feeds the Log Explorer, a
-later milestone — and its scope depends on an unresolved product question
-(does "view raw logs" mean the existing prune/reset audit trail, which is
-all this repo has, or the original raw ingested event, which this repo
-doesn't persist anywhere) that shouldn't be guessed at in code before
-someone decides; F0.10 (a WebSocket/SSE live-stream channel) is new
-plumbing with no existing analog to wrap, correctly sequenced after the
-read endpoints that do; F0.12-F0.14 are backend-data-model gaps with no
+library plus CLIs, with no HTTP surface at all) is implemented: F0.1-F0.10,
+F0.15 are real, tested code (F0.8's audit-log endpoint and F0.10's SSE
+live-stream channel — the two tasks not marked `[BACKEND TODO]` — were
+added in a later pass; see the Architecture section addendum below).
+F0.11 (real login) is deliberately deferred in favor of the frontend's
+mock-auth bypass (tasks.md F3.4) — that one, unlike F0.8/F0.10, *is*
+marked `[BACKEND TODO]` in tasks.md, since it needs a real product
+decision (who are "users," what do they authenticate against) before
+code can follow. F0.12-F0.14 remain unstarted for the same
+`[BACKEND TODO]` reason — they're backend-data-model gaps with no
 existing concept to build against at all (a company-security-score
 formula, IP/device/session-history fields, geographic data) and are
 flagged rather than fabricated, per this task's own "don't invent
 endpoints that don't exist" instruction. See this branch's Architecture
 section addendum below for the technical detail, and `tasks.md`'s F0
 entries for the per-task status/reasoning in full.
+
+Milestone F1 (Project Setup — the actual `frontend/` app, scaffolded on top
+of F0's API) is fully implemented: F1.1-F1.7 are all real, verified code
+(builds, lints, formats, and tests clean; see the Architecture section
+addendum below). Stack decisions made in this pass: Recharts (charting,
+F1.4/F12) and Zustand (client state, F1.4) installed but not yet wired
+into any component, since no real feature needs them before F5/F12 land —
+building example usage now would just be thrown away later. TanStack
+Query (F1.5), by contrast, *is* wired (a `QueryClientProvider` already
+wraps the app in `main.tsx`), since F4's hooks need that provider to
+already exist, not just the dependency installed.
+
+Milestone F2 (Routing & App Shell) is fully implemented: F2.1-F2.5 are all
+real, verified code, and F5.1/F5.2 (Navbar/Sidebar) were pulled forward
+into this pass since F2.2 has a hard dependency on both and neither had
+any unmet dependency of its own (F1.4 only). See the Architecture section
+addendum below for the routing/shell structure and the react-router
+`npm audit` finding (an RSC-mode-only advisory that doesn't apply to this
+app's plain client-side data router — kept the current version rather
+than downgrading for an inapplicable vulnerability class).
+
+Milestone F3 (Authentication) is implemented to the extent F0.11's absence
+allows: F3.1/F3.3/F3.4 are real, verified code. F3.2 was initially marked
+`[~]` (partial) — its route-guarding half was real, but its "redirect on a
+401 from the API client" half was genuinely blocked on Milestone F4 (the
+API client didn't exist yet to attach an interceptor to). F4 landing (see
+below) closed that gap, so F3.2 is now `[x]` too — the interceptor exists
+and is tested, though still practically unexercised, since no endpoint
+returns 401 until F0.11 defines real auth. Per this milestone's own
+instruction ("do not build a real credential store client-side"), there is
+no password field or credential store anywhere in the frontend — login is
+a free-text analyst name only, mirroring the backend's existing mock-auth
+convention. See the Architecture section addendum below for the auth
+store/session shape and what's explicitly left for F0.11 to finalize.
+
+Milestone F4 (API Integration Layer) is fully implemented: F4.1-F4.6 are
+all real, verified code (typecheck/lint/format/test/build all pass clean).
+Decided: a hand-written typed client (`frontend/src/types/api.ts` +
+`src/api/client.ts` + `src/api/endpoints.ts`) rather than OpenAPI codegen
+from F0.15's schema — the backend surface is 9 small routers that change
+rarely, so a generated client would add a build-time dependency without
+buying much over a small, explicit, hand-kept-in-sync mirror (the same
+tradeoff `schemas.py` itself already makes relative to the dataclasses it
+mirrors); revisit if the surface grows enough that drift becomes a real
+risk. `src/hooks/api/` has one TanStack Query hook per F0 endpoint (the
+seven tasks.md names plus five more covering the rest of F0's surface),
+each with a `staleTime`/`refetchInterval` matched to that data's real
+update cadence. `src/api/queryClient.ts` centralizes retry policy (5xx/
+network-only, capped at 3 attempts; mutations never auto-retry) and error
+handling (toast on a query's first failure; force logout + redirect on
+401 — the piece that closed out F3.2 above). `src/hooks/api/pagination.ts`
+bridges F0.15's offset/limit envelope to F5.4's `DataTable`, including a
+fallback page-count estimate for the several endpoints whose envelope
+omits `total`. `src/api/liveStream.ts`'s `LiveStreamManager`/
+`useLiveStream()` (backed by a new `src/store/liveStreamStore.ts` Zustand
+store) is a hand-rolled reconnect-with-backoff SSE client for F0.10's
+stream, deliberately not relying on native `EventSource` auto-reconnect;
+each event both lands in the live-event store and invalidates the
+matching query key. Like F1.4's Recharts/Zustand, F4.6 is built and
+tested but not yet mounted in any page — Milestone F13 (Live Monitoring)
+is what wires it in. See the Architecture section addendum below for
+file-by-file detail.
+
+While landing F4, Milestone F5 (Reusable UI Component Library) was found
+already fully implemented in the working tree — F5.3-F5.14 (F5.1/F5.2 were
+already `[x]`, pulled forward into F2) all existed as real, tested
+components (`frontend/src/components/{stat-card,data-table,charts,
+filter-bar,search-bar,date-range-picker,confirm-dialog,alert-banner,toast,
+skeletons,empty-state,severity-badge}.tsx` plus the shadcn `ui/` primitives
+they're built on), each already commented with its own `tasks.md` F5.x
+reference and written anticipating F4's not-yet-built conventions (a
+`loading` prop matching F4's fetch-in-flight state, pagination props
+shaped for F4.5's hooks). This pass didn't author any of it — just
+verified each file against its task description, confirmed the full
+`npm run lint`/`format:check`/`test`/`build` chain still passes, and
+flipped tasks.md's checkboxes, since leaving genuinely-done work unmarked
+would contradict this file's own "flip checkboxes as tasks complete"
+instruction. Whoever built F5 evidently used the same "pull forward a
+dependency-satisfied task early" judgment call F2 already documented for
+F5.1/F5.2, just for the rest of F5 at once, without updating tasks.md/
+CLAUDE.md at the time — worth keeping in mind that the working tree can
+race ahead of these docs.
+
+Milestone F6 (Executive Dashboard) is fully implemented: F6.1-F6.7 are all
+real, verified code. `frontend/src/pages/HomePage.tsx` is a responsive
+grid of six independently-data-fetching tiles under a new
+`frontend/src/features/dashboard/` folder (the "feature-scoped components"
+directory F1.6 reserved for exactly this). F6.1 (cybersecurity score)
+stays behind F5.13/F5.3's empty-state pattern since F0.12 doesn't exist.
+F6.2 (security level) and F6.5 (active monitoring) both use the
+"interim proxy" tasks.md itself allows in F6.2's line — thresholded real
+metrics (`motif_hit_rate_per_second`, `last_metrics_snapshot_age_seconds`)
+plus, for F6.2 only, the magnitude of the single highest-|score| entity —
+with the threshold constants documented in `logic.ts` as illustrative, not
+calibrated, pending F0.12. F6.6 (last analysis timestamp) turned out to
+need a decision neither of tasks.md's two named options directly
+supported: `MetricsSnapshotOut` carries no timestamp field at all, and
+`InferenceResult.t` is only available sorted by score, not by time — so
+it's derived from `/api/health`'s `last_metrics_snapshot_age_seconds`
+instead (documented in tasks.md's F6.6 line). Landing F6.7 also surfaced
+and fixed an unrelated router flake: a data router with `lazy` routes (F2.3)
+renders nothing during initial hydration without a `HydrateFallback`,
+which only became visible once `HomePage`'s chunk grew heavy enough to
+occasionally miss a test's default 1s async timeout — fixed with a shared
+`RouteHydrateFallback` component plus a suite-wide timeout bump, not
+specific to F6's own tiles. See the Architecture section addendum below
+for file-by-file detail.
 
 ## End-of-phase / end-of-milestone checklist
 
@@ -153,7 +258,10 @@ python -m t_gnn.score_entities --staged-dir <dir> [--top 20] [--output scores.js
 docker compose up -d                     # bring up Flink/Redis/Neo4j (needed for the Neo4j and Redis integration tests)
 ```
 
-There is no lint/format/build step configured yet.
+There is no lint/format/build step configured for the Python backend.
+`frontend_implementation` branch only: the `frontend/` app has its own
+lint/format/build/test commands (`npm run lint`/`format`/`build`/`test`)
+-- see `frontend/README.md`'s Commands section, not this one.
 
 `python -m t_gnn.data.stage_mordor` (Backlog B.8, stages an OTRF/Security-Datasets
 "Mordor" capture) lives on the separate `feature/mordor-ingestion` branch, not on
@@ -305,4 +413,55 @@ by the rest of the suite:
 - `src/t_gnn/api_state.py` (`create_api_tables()`, `ApiStateWriter`, `ApiStateReader`) — the Postgres bridge between the two processes, reusing the previously-idle local `t_gnn_dev` database (see "Local dev database" above) rather than standing up a new one, per this repo's existing "use Postgres for persistence needs outside Neo4j/Redis's roles" guidance. New tables: `users` (created now, before real auth exists, so `motif_feedback`/`alert_acknowledgements` have a real foreign key to attribute to once login lands — `ApiStateWriter.get_or_create_user()` inserts a placeholder row keyed on whatever free-text analyst string the mock-auth frontend sends), `metrics_snapshots`, `entity_scores` (upserted, latest value per entity only — not a full history), `motif_completions`, `motif_resets`, `motif_feedback`, `alert_acknowledgements`. `ApiStateWriter` auto-subscribes to `MotifAlertBus`/`MotifResetBus`/`InferenceResultBus`/`MotifFeedbackBus` — the same auto-subscribe convention `audit.py`'s `AuditLogger` already uses — and degrades gracefully on a Postgres outage (`self.available` flips false, logged once, mirroring `motif_engine.py`'s Redis-outage handling, tasks.md 6.3) instead of crashing the pipeline process. `scripts/init_postgres.py` now calls `create_api_tables()` after ensuring the database exists (table creation was previously deferred here to "whichever future task first needs a table" — this is that task). `scripts/run_pipeline.py` constructs an `ApiStateWriter` by default (disable with `--no-api-persist`) and calls `record_metrics_snapshot()` alongside its existing `MetricsCollector.snapshot()` call.
 - `src/t_gnn/api/` (`app.py`'s `create_app()`, `deps.py`, `schemas.py`, `routers/`) — the FastAPI service itself: `metrics.py` (`GET /api/metrics/snapshot`), `scores.py` (`GET /api/scores/entities`, paginated/sorted by `abs(score)`), `motifs.py` (`GET`/`POST /api/motifs/completions`, `/resets`, `/feedback` — the `POST` is F9.5's analyst-disposition groundwork), `forensics.py` (`GET /api/forensics/entity/{id}`, `/edge/{id}`, a direct wrapper over the already-real `Neo4jForensicQueryAPI` — `deps.get_forensics_api()` raises a clean 503 instead of crashing the service if Neo4j isn't reachable), `config.py` (`GET /api/config/protocols`, `/motifs`, reading the real hot-reloadable registries directly with no Postgres dependency), `alerts.py` (`POST /api/alerts/ack`, F13.6's groundwork — keyed on `detection_type`+`detection_ref` rather than one unified alert id, since motif completions and anomaly-path detections don't share an id space), `health.py` (`GET /api/health`, checking Postgres/Neo4j/Redis reachability + staleness of the last recorded metrics snapshot). `app.py`'s exception handlers give every error the same `{"error": {"code": ..., "message": ...}}` envelope; `schemas.py`'s `Paginated[T]` (`items`/`limit`/`offset`/`total`) is the pagination envelope every list endpoint uses (offset-based — cursor-based was considered and rejected as unneeded at this scale/write-concurrency). `python -m t_gnn.api` runs it, mirroring this repo's other `python -m t_gnn.*` CLI convention.
 - `tests/test_api_state.py` (live-Postgres round-trips per table, skip-if-unreachable — same convention `test_cold_storage.py`/`test_forensics.py` use for Neo4j) and `tests/test_api.py` (HTTP-layer tests via FastAPI's `TestClient` + `app.dependency_overrides`, no live infra needed — an in-memory fake duck-typing both `ApiStateReader`'s and `ApiStateWriter`'s methods, the same relationship `InMemoryColdStorageWriter` has to `Neo4jColdStorageWriter`). Verified end-to-end against the real `docker compose up -d` stack and a real local Postgres: a live `scripts/run_pipeline.py` run (which detected a real `lateral_pivot` motif) followed by a separately-started `python -m t_gnn.api` process correctly serving that data back over HTTP, with zero shared memory between the two processes — confirming the decoupled architecture decision actually works, not just that its unit tests pass.
-- Not started: F0.8 (`GET /api/audit/log`, an HTTP wrapper over `audit.py`'s existing `logs/audit.log`), F0.10 (a WebSocket/SSE push channel for `MotifCompletionEvent`/`PrunedEdgeEvent`/`InferenceResult`), F0.12 (a "company cybersecurity score" formula/aggregation job), F0.13 (IP/device/session-history fields — would require a `config/schema/edge.schema.json` change, a cross-cutting change touching every ingestion adapter), F0.14 (geographic attack-map data, blocked on F0.13). See the Project section's frontend-status paragraph above for why each was deliberately deferred rather than overlooked.
+- `src/t_gnn/audit.py`'s `read_records()` and `src/t_gnn/api/routers/audit.py` (`GET /api/audit/log`) — F0.8, added in a later pass once F0.9's read-only-registry precedent made clear this endpoint didn't actually depend on the unresolved "what does 'raw logs' mean" product question (that question is F11.1's UI-copy concern, not a blocker on serving the audit trail that already exists). `read_records()` is a plain file scan/filter (`since`/`record_type`) over `FileAuditSink`'s NDJSON, newest-first, matching every other list endpoint's ordering convention; `deps.py`'s `audit_log_path()` reads `AUDIT_LOG_PATH` (default `logs/audit.log`, mirroring `scripts/run_pipeline.py --audit-log`'s default) so both processes agree on the file without sharing code. No Postgres/Neo4j/Redis dependency at all — same "no live-infra dependency" shape as F0.9's config endpoints.
+- `src/t_gnn/api/routers/stream.py` (`GET /api/stream/events`) — F0.10, implemented as SSE rather than WebSocket (one-directional server→client is all F13's Live Monitoring needs; no extra dependency beyond FastAPI/Starlette). Honest architectural note: F0's decoupled-process decision means the API process has no live bus to relay from directly (that memory lives in whatever process is running `scripts/run_pipeline.py`) — so this is a polling implementation wearing a push interface. It polls `ApiStateReader`'s new cursor-based methods (`list_motif_completions_since(min_id)`, `list_motif_resets_since(min_id)`, `list_entity_scores_since(min_updated_at)` — ascending-order variants of F0.3-F0.5's DESC "recent page" methods, added alongside this task) plus `audit.py`'s `read_records(since=...)` for prune events, on a `STREAM_POLL_INTERVAL_SECONDS`-configurable interval (`deps.get_stream_config()`, default 1s), re-emitting new rows as SSE events (`motif_completion`/`motif_reset`/`inference_result`/`prune`) plus a periodic `heartbeat` so a client's reconnect-with-backoff logic (F4.6) can tell "quiet" from "stalled." A Postgres error mid-poll surfaces as an `error` SSE event and the loop keeps retrying rather than the connection dying — the same graceful-degradation posture `require_postgres` gives request/response endpoints, adapted for a long-lived connection.
+- Not started (both still marked `[BACKEND TODO]` in tasks.md, unlike F0.8/F0.10 above): F0.12 (a "company cybersecurity score" formula/aggregation job), F0.13 (IP/device/session-history fields — would require a `config/schema/edge.schema.json` change, a cross-cutting change touching every ingestion adapter), F0.14 (geographic attack-map data, blocked on F0.13). F0.11 (real auth) also remains deferred per the developer's explicit choice to keep the mock-auth bypass for now. See the Project section's frontend-status paragraph above for why each was deliberately deferred rather than overlooked.
+
+**Frontend Implementation: Milestone F1 — Project Setup.** The actual `frontend/` app, scaffolded via `npm create vite@latest frontend -- --template react-ts` (React 19 / Vite 8 / TypeScript 6, whatever `create-vite@latest` resolved to at scaffold time — nothing pinned deliberately). `frontend/` is a normal `package.json`-rooted npm project nested one directory below this repo's git root (the repo itself is primarily the Python backend) — every path below is relative to `frontend/`, not the repo root.
+
+- Vite's own default template now ships `oxlint` instead of ESLint and has no Prettier/test setup at all — none of that fits F1.2's explicit "ESLint + Prettier" ask, so `oxlint`/`.oxlintrc.json` were removed and replaced: `eslint.config.js` (flat config) composing `@eslint/js`, `typescript-eslint`'s recommended rules, `eslint-plugin-react-hooks`, `eslint-plugin-react-refresh`, and `eslint-config-prettier` (to disable any ESLint formatting rules that would conflict with Prettier); `.prettierrc.json`/`.prettierignore` for formatting. `package.json` gained `lint`/`lint:fix`/`format`/`format:check`/`test`/`test:watch` scripts plus a `lint-staged` config (ESLint --fix + Prettier --write on staged files).
+- Commit hooks (`husky` + `lint-staged`) needed one nonstandard step because of the nested-package layout: husky v9's own `.git`-detection fails when invoked with cwd inside a subdirectory (confirmed directly — `npx husky` from `frontend/` errors `.git can't be found` even though plain `git` commands resolve the parent `.git` fine from there), so `package.json`'s `prepare` script is `cd .. && npx --prefix frontend husky frontend/.husky` — it explicitly moves to the repo root first, then points `core.hooksPath` at `frontend/.husky` (a path relative to the repo root, which is where git actually looks it up). `frontend/.husky/pre-commit` itself is `cd frontend && npx lint-staged`, since git hook scripts always run with cwd at the repo root regardless of where `core.hooksPath` points. Verified end-to-end: fresh `npm install` inside `frontend/` correctly re-establishes `core.hooksPath`, and the hook runs `lint-staged` successfully.
+- `vite.config.ts`'s `resolve.alias` (`@` → `./src`) and `tsconfig.app.json`'s `paths` (`@/*` → `./src/*`, no `baseUrl` — TypeScript 6.0 deprecates it, `paths` alone now resolves relative to the tsconfig file) are the F1.3 path-alias pair; both must stay in sync by hand since Vite and `tsc` each read their own config. `src/config/env.ts` reads `import.meta.env.VITE_API_BASE_URL` (typed via `src/vite-env.d.ts`'s `ImportMetaEnv` augmentation) and throws immediately if unset, rather than silently falling back to a possibly-wrong backend URL; `frontend/.env.example` documents it (default `http://127.0.0.1:8000`, F0's `python -m t_gnn.api` default), and real values live in the already-`.gitignore`d `.env.local` (Vite's own convention — no new gitignore entry needed).
+- Recharts and Zustand (F1.4) are installed but deliberately not wired into any component — no real feature needs either yet (F5 builds shared components, F12 builds charts), and example/demo usage now would just be dead code those milestones delete. TanStack Query (F1.5) is different: its `QueryClientProvider` already wraps the app root in `src/main.tsx` with a module-level `QueryClient`, because F4's API hooks need that provider mounted, not merely the package installed. (F2 replaced what that provider wraps — see below — but the provider itself is unchanged from F1.)
+- `frontend/src/{pages,components,features,api,hooks,store,types}/` (F1.6) each hold a `.gitkeep` placeholder (git doesn't track empty directories); `config/` was added alongside them for `env.ts` above — documented in `frontend/README.md`'s folder-structure table so the extra directory doesn't read as unexplained drift from tasks.md's seven.
+- `.github/workflows/frontend-ci.yml` (F1.7) is this repo's first GitHub Actions workflow of any kind (the only prior CI-relevant command anywhere was `pytest`, run manually, no workflow file). Triggers on pushes to `frontend_implementation` and on any PR touching `frontend/**`; `defaults.run.working-directory: frontend` since the app isn't at the repo root. Runs `npm ci` → lint → format:check → test (Vitest + React Testing Library) → build, in that order, so a lint/format failure surfaces before spending time on a build.
+- Vite's default marketing-template `App.tsx` (counter demo, hero/logo images, doc links) was replaced with a minimal placeholder heading in F1, then removed entirely in F2 once `src/router.tsx` took over as `main.tsx`'s render root (see below) — there was no longer anything for a standalone `App` component to do. `src/App.css` and the unused image assets were removed with the original F1 replacement; `src/index.css` was trimmed to a plain reset (the template's centered-marketing-page layout doesn't fit a dashboard).
+- Verified directly, not just by reading the config: `npm run lint`, `npm run format:check`, `npm run test`, and `npm run build` all pass clean from a fresh `npm install`; `npm run dev` was also started and its served HTML/module output inspected (correct `<title>`, `QueryClientProvider` wiring present in the compiled `main.tsx` output) before being stopped.
+
+**Frontend Implementation: Milestone F2 — Routing & App Shell.** Builds directly on F1's scaffold; F5.1/F5.2 (Navbar/Sidebar) were pulled forward into this pass since F2.2 has a hard dependency on both and neither had any dependency of its own beyond F1.4 (already satisfied) — building throwaway placeholder nav components in F2 only to redo them properly in F5 would have been pure waste.
+
+- `react-router-dom@7` (data router APIs: `createBrowserRouter`/`RouterProvider`), installed fresh for F2.1. `npm audit` reports a high-severity advisory (GHSA-qwww-vcr4-c8h2) against the installed version, but it's specific to RSC-mode server actions — this app is a plain client-side SPA with no server actions/RSC mode, so that code path is never exercised; the only remediation `npm audit fix` offers is downgrading below 7.12.0, which would trade a real, current version for an older one over an inapplicable vulnerability class, so 7.18.2 was kept as-is. Revisit if a genuine patched release ships.
+- `src/config/routes.ts` is F2.1's single source of truth for route paths (`ROUTES`) and the nav-relevant subset (`NAV_ROUTES` — excludes `/investigation/:entityId`, a drill-down detail route with no static nav entry, and `/login`, outside the authenticated shell) that F5.2's Sidebar renders from, so the two can't silently drift apart.
+- `src/router.tsx` exports both `routes` (a plain `RouteObject[]`) and `router` (`createBrowserRouter(routes)`) — the split exists purely for testability: `src/router.test.tsx` feeds the same `routes` tree into `createMemoryRouter` (initial-entries-driven, no real browser history) rather than exercising the production browser router directly. F2.3's code splitting uses React Router v7's native `lazy` route field (each leaf route dynamically imports a module exporting `Component`) instead of a hand-rolled `React.lazy`/`Suspense` pair — the data router already awaits the import during navigation. Verified concretely: `npm run build`'s output lists each page as its own chunk (`HomePage-*.js`, `AnalyticsPage-*.js`, etc.), not folded into the main bundle.
+- `src/components/AppShell.tsx` (F2.2) is the root layout route — `Navbar` (`src/components/Navbar.tsx`, F5.1, pulled forward) on top, `Sidebar` (`src/components/Sidebar.tsx`, F5.2, pulled forward: `NavLink`s generated from `NAV_ROUTES`) plus `<Outlet/>` below. `/login`'s route sits outside this layout entirely (a sibling in `router.tsx`'s top-level array, not a child), so it renders with no nav chrome. (Navbar gained F3.3's logout control in Milestone F3 — see below; still no user menu/branding beyond that.)
+- `src/components/ProtectedRoute.tsx` (F2.4) was a bare `<Outlet/>` pass-through when first built in F2, by design — every page needing auth gating was already nested under it in `router.tsx`, so Milestone F3 (F3.2) only had to add the real check inside this one component rather than re-nest routes later. It now does that real check; see the Milestone F3 addendum below.
+- `src/components/RouteErrorBoundary.tsx` (the root layout route's `errorElement`) and `src/pages/NotFoundPage.tsx` (the `path: '*'` leaf route) are F2.5's two distinct failure paths — a thrown render/loader/lazy-import error vs. a syntactically matched but nonexistent path — not one component covering both.
+- `src/pages/*.tsx` are placeholder page components for all eight routes (Home/Analytics/Investigation/Detections/Logs/Monitoring/Settings), each just a heading plus a note naming the milestone that builds the real page out (F6/F12/F10/F9/F11/F13/F15 respectively) — consistent with F1's "don't build throwaway feature code ahead of the milestone that owns it" posture. `LoginPage` was a placeholder in F2; Milestone F3 (F3.1) gave it real (mock-auth) behavior — see below.
+- `src/router.test.tsx` exercises the route tree via `createMemoryRouter`: `/analytics` (an unmatched path) renders `NotFoundPage`, `/login` renders without shell chrome. As of Milestone F3, every protected-route case is split into its own `describe` block that logs in via `useAuthStore.getState().login(...)` first (an unauthenticated `describe` block separately covers the redirect-to-`/login` case) — see the Milestone F3 addendum below for why this changed. Verified end-to-end, not just unit-tested: `npm run build`'s per-page chunking output and a running `npm run dev` instance (HTML shell served correctly for both `/` and a client-only route like `/analytics`) both checked directly.
+
+**Frontend Implementation: Milestone F3 — Authentication.** Implemented to the extent F0.11's absence allows — this milestone's own header is explicit that anything beyond a stubbed/mocked login is blocked on that backend gap, and its instructions forbid building a real credential store client-side.
+
+- `src/store/authStore.ts`'s Zustand `useAuthStore` (F3.1) holds `session: {analyst, expiresAt} | null` in memory only — no `persist` middleware, no localStorage/sessionStorage. That's a deliberate reading of tasks.md's own "token/session in memory" phrasing, not an oversight: a page reload loses the session and returns to `/login`. `analyst` is free text, not a verified credential, mirroring the backend's already-real mock-auth convention (`ApiStateWriter.get_or_create_user()`, this file's F0 addendum) rather than inventing a second one. `isSessionValid()` checks `expiresAt` (a 12h client-side-only TTL) — this has no server-side enforcement behind it and isn't meant to; it exists so F3.3 has something concrete to expire, and F0.11 replaces it with whatever real token expiry that backend design defines. "Refresh strategy" (tasks.md F3.1's own phrase) is explicitly not implemented for the same reason — there's no real token to refresh yet.
+- `src/pages/LoginPage.tsx` (F3.1) branches on `env.mockAuthEnabled` (F3.4, `VITE_MOCK_AUTH_ENABLED`, defaults `true`): enabled, it's a one-field form (analyst name, no password) that calls `authStore.login()` and navigates to `location.state.from` (the path `ProtectedRoute` redirected from) or `ROUTES.home`; disabled, it shows a plain "authentication isn't available yet" message rather than a form with nothing real behind it. No separate `[BACKEND TODO]`-style empty-state component was pulled forward from F5.13 for this one case — it's a single paragraph, not worth pulling forward a whole shared component for.
+- `src/components/ProtectedRoute.tsx` (F3.2) now actually checks `isSessionValid(session)` and renders `<Navigate to={ROUTES.login} state={{from: location.pathname}} replace />` instead of always rendering `<Outlet/>`. This covers route guarding; F3.2's other half — redirecting to `/login` when the *API client* gets a 401 — is `src/api/queryClient.ts`'s global error handler, added in Milestone F4 (see that addendum below).
+- `src/components/Navbar.tsx` (F3.3) shows the logged-in analyst's name and a "Log out" button when a session exists (`useAuthStore`'s `logout()` then `navigate(ROUTES.login)`); renders neither when there's no session. Session-*expiry* itself is enforced by `ProtectedRoute` (above), not Navbar — an expired session behaves identically to no session at all.
+- Tests: `src/store/authStore.test.ts` (login/logout/`isSessionValid` including the expired-timestamp case), `src/pages/LoginPage.test.tsx` (submits the form, confirms redirect-preservation via `location.state.from`, confirms an empty submission doesn't log in) plus `src/pages/LoginPage.mockAuthDisabled.test.tsx` (a separate file since it needs `vi.mock('@/config/env', ...)` to force the disabled branch — Vite env vars are static per test file), `src/components/Navbar.test.tsx` (logout control visibility + click behavior), and `src/router.test.tsx`'s rewrite (noted above) confirming the redirect-when-unauthenticated / render-when-authenticated split for every protected route.
+
+**Frontend Implementation: Milestone F4 — API Integration Layer.** Every F0 endpoint now has a typed client function and a matching TanStack Query hook; this is the layer every later data-driven milestone (F6 onward) builds its pages on.
+
+- `src/types/api.ts` hand-mirrors `src/t_gnn/api/schemas.py` field-for-field — codegen from F0.15's `/openapi.json` was considered and deferred (decided with the developer implicitly by precedent: the surface is 9 small routers that change rarely, so a generated client would add a build-time dependency without buying much over an explicit file kept in sync by hand, the same tradeoff `schemas.py` itself makes relative to the dataclasses it mirrors). Revisit if the surface grows enough that manual drift becomes a real risk.
+- `src/api/client.ts`'s `apiRequest<T>()` is the single `fetch` wrapper every function in `src/api/endpoints.ts` (one per backend route, grouped by router 1:1) goes through. It parses F0.15's `{"error": {code, message}}` envelope into a typed `ApiError` (carrying both the HTTP `status` and the envelope's own `code`, which are the same value for every handler in `app.py` today but aren't guaranteed to stay that way), and wraps a `fetch` that never got a response at all (offline, DNS, CORS, connection refused) in a distinct `ApiNetworkError` rather than conflating the two failure modes. A caller-initiated `AbortError` (TanStack Query cancelling an in-flight request on unmount/refetch) passes through unwrapped so Query's own cancellation handling still recognizes it.
+- `src/hooks/api/` has one hook per endpoint: `useMetricsSnapshot`, `useEntityScores`, `useMotifCompletions`/`useMotifResets`, `useMotifFeedback` (list) + `useSubmitMotifFeedback` (mutation), `useEntityForensics` + `usePrunedEdge`, `useAuditLog`, `useProtocolConfig`/`useMotifConfig`, `useHealth`, `useAlertAck` (mutation). Cadence is tuned in three tiers: live-ish data (metrics snapshot, scores, motif completions/resets, audit log) polls every 5-10s as a fallback until F13's live stream is mounted on that page; config (protocol/motif) is near-static (5-minute `staleTime`, no polling) since it only changes via a hand-edited YAML + `reload()`; forensics is historical Neo4j data that never changes once written, so it gets a long/`Infinity` `staleTime` instead. `src/api/queryKeys.ts` centralizes every hook's cache key so `liveStream.ts`'s cache invalidation (below) targets the exact same keys the hooks registered under.
+- `src/api/queryClient.ts`'s configured `QueryClient` (wired into `main.tsx`, replacing F1.5's bare default instance) is F4.3/F4.4 together: a shared `shouldRetry()` (retry 5xx/network failures up to 3 attempts with TanStack's default exponential backoff, never retry a 4xx — one policy covers every endpoint including `usePrunedEdge`'s expected-404 case, so no per-hook override was needed) and a `QueryCache`/`MutationCache` `onError` that toasts (`src/components/toast.ts`, F5.11) any failure — but only a query's *first* one (`query.state.data === undefined`), so an already-successful polling query's transient miss during a later refetch doesn't interrupt the user every interval. A 401 additionally calls `useAuthStore.getState().logout()` and `router.navigate(ROUTES.login)` (imperative navigation on the data router instance, not a React component) — this is F3.2's other half, and it's real and tested even though no endpoint returns 401 in practice until F0.11 exists. Mutations opt out of retry entirely (`useSubmitMotifFeedback`, `useAlertAck`) since retrying a POST risks a duplicate submission.
+- `src/hooks/api/pagination.ts`'s `toOffsetParams()`/`toPaginatedResult()` are F4.5 — every paginated hook above uses them to convert a `PaginationState` to/from F0.15's `limit`/`offset` envelope. The one real wrinkle: `total` is populated for `audit.log` (a full file scan per request, per `audit.py`'s own docstring) but `null` for scores/motif completions/resets/feedback (no `COUNT(*)` behind those) — `toPaginatedResult()` returns an exact `pageCount` when `total` is known, else a running floor (current page, +1 more once a full page proves another might exist), so `DataTable`'s manual-pagination `pageCount` prop (F5.4) always gets a real number either way.
+- `src/api/liveStream.ts`'s `LiveStreamManager` + `useLiveStream()` (F4.6) is a hand-rolled SSE client for F0.10's `GET /api/stream/events`, backed by a new `src/store/liveStreamStore.ts` Zustand store (bounded to the 200 most recent events, for F13.2's raw feed). Deliberately doesn't rely on native `EventSource` auto-reconnect — its fixed ~3s retry with no backoff and no observable connection status doesn't fit a stream whose server side (`stream.py`) already has its own graceful-degradation posture around Postgres hiccups. Every `onerror` (a transport-level drop) closes the connection and schedules the class's own reconnect with exponential backoff (1s → 30s cap, reset to 1s on the next clean `onopen`). Each named SSE event (`motif_completion`/`motif_reset`/`inference_result`/`prune`) pushes into the live-event store *and* invalidates the matching `queryKeys` entry, so any already-mounted list picks up the change through a normal TanStack Query refetch rather than a hand-spliced cache write. `heartbeat` updates a timestamp with no feed entry; the server's own named `error` SSE event (a Postgres hiccup mid-poll, connection itself still alive) is recorded separately from a transport failure (`onerror`) since the two mean different things to a reconnect strategy. `EventSourceLike`/`eventSourceFactory` are a deliberately minimal duck-typed seam (not `Pick<EventSource, ...>`, whose DOM-lib overloads are more than this needs) so tests can inject a fake — jsdom has no native `EventSource`. Not mounted in any page yet, matching F1.4's already-established "installed, tested, not yet wired into a component" posture for a dependency whose consuming milestone (F13) hasn't landed.
+- Verified concretely, not just by reading the code: `npx tsc -b --noEmit`, `npm run lint`, `npm run format:check`, `npm run test` (95 tests across 21 files, up from 71/16 pre-F4), and `npm run build` all pass clean.
+
+**Frontend Implementation: Milestone F6 — Executive Dashboard.** The first data-driven page — every earlier milestone either had no real page content (F2/F3's placeholders) or wasn't consumed by one yet (F4's hooks, F5's components). This is where they all come together for the first time.
+
+- `src/features/dashboard/logic.ts` holds every tile's derivation as a pure, directly-tested function, kept separate from the components that render them: `computeSecurityLevel()` (F6.2), `computeThreatStatus()` (F6.3), `computeMonitoringStatus()` (F6.5), plus a shared `tileUnavailableMessage()` every tile uses to turn a failed/absent query into F5.3's `StatCard.unavailable` text (preferring the backend's own error message, e.g. `metrics.py`'s "no metrics snapshot recorded yet" 404 detail, over a generic one). `computeSecurityLevel()` takes the raw (possibly negative) top entity score and takes its own `Math.abs()` internally rather than trusting call sites to — this is deliberate after an actual bug during development: the first version required callers to pass an already-`abs()`'d value, and `SecurityLevelTile.tsx` didn't, silently treating every negative score as "normal" until `logic.test.ts`'s "takes the worse of the two signals" case (a large negative score) caught it.
+- `src/features/dashboard/status-pill.tsx`'s `StatusPill`/`DependencyDot` are a small tonal-dot component for infra/monitoring status (F6.2-F6.5), deliberately *not* built on F5.14's `SeverityBadge` — that component's vocabulary (`critical`/`high`/`medium`/`low`/`info`) is specifically threat-detection severity (F9/F10/F11), and "is Postgres reachable" isn't a threat severity, so this reuses the same tonal-dot *visual* pattern without stretching F5.14's *semantic* one.
+- Six tile components (`CybersecurityScoreTile`, `SecurityLevelTile`, `ThreatStatusTile`, `SystemHealthTile`, `MonitoringStatusTile`, `LastAnalysisTile`), each an F5.3 `StatCard` wired to its own F4.2 hook call(s) — co-located data-fetching (TanStack Query's usual pattern) rather than `HomePage.tsx` fetching once and threading props down, so one tile's slow or failed query can't block the other five from rendering. `CybersecurityScoreTile` has no hook at all (F0.12 doesn't exist); `SecurityLevelTile` combines `useMetricsSnapshot()` with `useEntityScores({pageIndex: 0, pageSize: 1})` (F0.3's `ORDER BY abs(score) DESC` means page 1 size 1 *is* "the single highest-magnitude entity"); `ThreatStatusTile` and `LastAnalysisTile` both anchor "now" to their query's own `dataUpdatedAt` timestamp rather than a live `Date.now()` call during render — not just a style choice: the React Compiler's purity lint (`react-hooks/purity`) hard-errors on an impure `Date.now()` call inside a component body, and anchoring to `dataUpdatedAt` is arguably more correct anyway (a cached, slightly-stale read shouldn't silently drift its own "recent window" math as wall-clock time passes underneath it).
+- `src/pages/HomePage.tsx` (F6.7) assembles all six into a `grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3` layout.
+- Landing this milestone surfaced and fixed one unrelated flake: `router.test.tsx`'s `/login`-and-`/analytics` cases started intermittently timing out once `HomePage`'s lazy-loaded chunk grew heavier (more hooks/components to transform), because React Router v7's data routers render *nothing* for a route branch containing an unresolved `lazy()` import unless a `HydrateFallback` is defined — previously invisible since every page chunk was small enough to resolve well within `@testing-library`'s default 1000ms `findBy` timeout even under a full-suite run's shared transform load. Fixed at the root: `src/components/RouteHydrateFallback.tsx` (a `RouteErrorBoundary`-style sibling, wired onto `router.tsx`'s two top-level route entries) plus `src/test/setup.ts` raising the suite-wide async timeout to 5000ms via `@testing-library/react`'s `configure()` — a real fix for real (if usually sub-1000ms) dynamic-import latency, not a bug in F6's own code.
+- Tests: `logic.test.ts` (every threshold boundary for all three derivations, plus the sign/magnitude bug above), `CybersecurityScoreTile.test.tsx`, `SecurityLevelTile.test.tsx` (all three severity tiers plus the error-message-passthrough case), `SystemHealthTile.test.tsx` (healthy and degraded), and `HomePage.test.tsx` (a smoke test asserting all six tiles render and resolve together). `router.test.tsx` and `queryClient.test.ts`'s existing suites needed no logic changes, only the timeout/fallback fix above. Verified concretely: `npx tsc -b --noEmit`, `npm run lint`, `npm run format:check`, `npm run build`, and `npm run test` (113 tests across 26 files, up from 95/21 pre-F6, stable across repeated full-suite runs) all pass clean. The dev server (`npm run dev`) was started and its served shell confirmed loading correctly; a full visual check of the dashboard's live-backend rendering was not done this pass (no browser-automation tool was available in this session) — the tile-level behavior (loading/success/error/unavailable states) is covered by the component tests above instead.
