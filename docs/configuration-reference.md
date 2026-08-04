@@ -201,6 +201,8 @@ testing" for the intended workflow (feed the output straight into
 |---|---|
 | `PGHOST`/`PGPORT`/`PGDATABASE`/`PGUSER`/`PGPASSWORD` | `src/t_gnn/db.py` (Postgres, for persistence needs that don't map to Flink/Redis/Neo4j — see `CLAUDE.md`'s "Local dev database" section) |
 | `NEO4J_URI`/`NEO4J_USER`/`NEO4J_PASSWORD` | Documented reference values matching `docker-compose.yml`; not auto-read by `Neo4jConfig` (construct it explicitly) |
+| `AUDIT_LOG_PATH` | `frontend_implementation` branch only — `src/t_gnn/api/deps.py`'s `audit_log_path()` (tasks.md F0.8), default `logs/audit.log`, must match whatever `scripts/run_pipeline.py --audit-log` path the pipeline process is writing to |
+| `STREAM_POLL_INTERVAL_SECONDS` | `frontend_implementation` branch only — `src/t_gnn/api/deps.py`'s `get_stream_config()` (tasks.md F0.10's SSE endpoint), default `1.0` |
 
 Copy `.env.example` to `.env` and edit it for your local credentials —
 `.env` is gitignored and auto-loaded by `t_gnn/db.py`.

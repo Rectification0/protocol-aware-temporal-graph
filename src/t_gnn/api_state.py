@@ -177,6 +177,18 @@ class MotifFeedbackRecord:
 
 
 @dataclass(frozen=True)
+class EntityScoreUpdate:
+    """`InferenceResult` plus the `entity_scores.updated_at` upsert
+    timestamp -- F0.10's SSE poll needs `updated_at` to advance its cursor,
+    but `InferenceResult` itself (tgnn.py) has no such field, since that
+    dataclass is shared with the non-API-layer pipeline code that has no
+    concept of "when Postgres last upserted this row"."""
+
+    result: InferenceResult
+    updated_at: float
+
+
+@dataclass(frozen=True)
 class AlertAcknowledgementRecord:
     id: int
     detection_type: str
@@ -462,6 +474,65 @@ class ApiStateReader:
                 rows = cur.fetchall()
         return [
             MotifFeedbackRecord(id=r[0], motif_name=r[1], chain_key=r[2], disposition=r[3], noted_at=r[4], analyst=r[5])
+            for r in rows
+        ]
+
+    def list_motif_completions_since(self, min_id: int, limit: int = 100) -> list[MotifCompletionRecord]:
+        """F0.10's SSE poll cursor: rows with `id > min_id`, ascending (so
+        a client emits them to the wire in the order they actually
+        happened), rather than `list_motif_completions`'s DESC "recent
+        page" ordering meant for a one-shot listing request."""
+        with self._connection_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, motif_name, chain_key, matched_edges, completed_at, confidence
+                    FROM motif_completions WHERE id > %s ORDER BY id ASC LIMIT %s
+                    """,
+                    (min_id, limit),
+                )
+                rows = cur.fetchall()
+        return [
+            MotifCompletionRecord(id=r[0], motif_name=r[1], chain_key=r[2], matched_edges=r[3], completed_at=r[4], confidence=r[5])
+            for r in rows
+        ]
+
+    def list_motif_resets_since(self, min_id: int, limit: int = 100) -> list[MotifResetRecord]:
+        with self._connection_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, motif_name, chain_key, triggering_edge_id, matched_edges, reset_at
+                    FROM motif_resets WHERE id > %s ORDER BY id ASC LIMIT %s
+                    """,
+                    (min_id, limit),
+                )
+                rows = cur.fetchall()
+        return [
+            MotifResetRecord(id=r[0], motif_name=r[1], chain_key=r[2], triggering_edge_id=r[3], matched_edges=r[4], reset_at=r[5])
+            for r in rows
+        ]
+
+    def list_entity_scores_since(self, min_updated_at: float, limit: int = 100) -> list[EntityScoreUpdate]:
+        """Cursor is `updated_at` (upsert time), not `t` (the inference
+        pass's own timestamp) -- `entity_scores` keeps only the latest row
+        per entity (F0.3's design), so `updated_at` is what actually
+        advances monotonically as new scores land."""
+        with self._connection_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT entity_id, score, t, trigger, motif_name, updated_at FROM entity_scores
+                    WHERE updated_at > %s ORDER BY updated_at ASC LIMIT %s
+                    """,
+                    (min_updated_at, limit),
+                )
+                rows = cur.fetchall()
+        return [
+            EntityScoreUpdate(
+                result=InferenceResult(entity_id=r[0], score=r[1], t=r[2], trigger=r[3], motif_name=r[4]),
+                updated_at=r[5],
+            )
             for r in rows
         ]
 

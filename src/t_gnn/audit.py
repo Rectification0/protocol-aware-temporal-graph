@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Protocol
+from typing import Optional, Protocol
 
 from t_gnn.motif_engine import MotifResetBus, MotifResetEvent
 from t_gnn.pruning import PruneEventBus, PrunedEdgeEvent
@@ -97,3 +97,35 @@ class AuditLogger:
             "reset_at": event.reset_at,
             "logged_at": time.time(),
         })
+
+
+def read_records(
+    path: Path,
+    since: Optional[float] = None,
+    record_type: Optional[str] = None,
+) -> list[dict]:
+    """Reads `FileAuditSink`'s newline-delimited JSON records back out
+    (tasks.md F0.8's `GET /api/audit/log` backing) -- a plain file tail/scan
+    rather than a second store, since the log itself is already the durable
+    record NFR5 asks for. Returns records newest-first (matching every other
+    list endpoint's DESC-by-time convention), optionally filtered to
+    `logged_at >= since` and/or an exact `record_type` (`"prune"` /
+    `"motif_reset"`). Missing file reads as "no records yet", not an error --
+    a fresh pipeline run may not have pruned/reset anything yet.
+    """
+    if not path.exists():
+        return []
+    records: list[dict] = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            record = json.loads(line)
+            if since is not None and record.get("logged_at", 0.0) < since:
+                continue
+            if record_type is not None and record.get("type") != record_type:
+                continue
+            records.append(record)
+    records.sort(key=lambda r: r.get("logged_at", 0.0), reverse=True)
+    return records

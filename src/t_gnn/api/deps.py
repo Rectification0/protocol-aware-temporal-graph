@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import time
 from functools import lru_cache
+from pathlib import Path
 from typing import Callable, Optional, TypeVar
 
 import psycopg2
@@ -30,6 +31,33 @@ from t_gnn.motifs import MotifRegistry
 from t_gnn.protocol_registry import ProtocolDecayRegistry
 
 T = TypeVar("T")
+
+
+def audit_log_path() -> Path:
+    """Mirrors `scripts/run_pipeline.py`'s `--audit-log` default
+    (`logs/audit.log`) -- both processes need to agree on where
+    `FileAuditSink` writes without sharing code, same convention as
+    `neo4j_config()`/`redis_client()` above."""
+    return Path(os.environ.get("AUDIT_LOG_PATH", "logs/audit.log"))
+
+
+class StreamConfig:
+    """F0.10's polling cadence/iteration-cap knobs. `max_iterations` is
+    `None` (run until the client disconnects) in real use; tests override
+    this dependency with a small cap so the SSE generator terminates
+    deterministically instead of relying on `Request.is_disconnected()`
+    behaving a particular way under `TestClient`."""
+
+    def __init__(self, poll_interval_seconds: float, max_iterations: Optional[int]) -> None:
+        self.poll_interval_seconds = poll_interval_seconds
+        self.max_iterations = max_iterations
+
+
+def get_stream_config() -> StreamConfig:
+    return StreamConfig(
+        poll_interval_seconds=float(os.environ.get("STREAM_POLL_INTERVAL_SECONDS", "1.0")),
+        max_iterations=None,
+    )
 
 
 def neo4j_config() -> Neo4jConfig:

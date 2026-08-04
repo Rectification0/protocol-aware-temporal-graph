@@ -11,12 +11,23 @@ pagination/error conventions, and returns the documented shape.
 registries, since those need no live infra to read.
 """
 
+import json
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
 from t_gnn.api import deps
 from t_gnn.api.app import app
-from t_gnn.api_state import AlertAcknowledgementRecord, MotifCompletionRecord, MotifFeedbackRecord, MotifResetRecord
+from t_gnn.api.deps import StreamConfig
+from t_gnn.api_state import (
+    AlertAcknowledgementRecord,
+    EntityScoreUpdate,
+    MotifCompletionRecord,
+    MotifFeedbackRecord,
+    MotifResetRecord,
+)
+from t_gnn.audit import FileAuditSink
 from t_gnn.forensics import PrunedEdgeRecord
 from t_gnn.metrics import MetricsSnapshot
 from t_gnn.tgnn import InferenceResult
@@ -33,6 +44,7 @@ class FakeApiState:
         self.scores: list[InferenceResult] = []
         self.completions: list[MotifCompletionRecord] = []
         self.resets: list[MotifResetRecord] = []
+        self.score_updates: list[EntityScoreUpdate] = []
         self.feedback: list[MotifFeedbackRecord] = []
         self.acks: list[AlertAcknowledgementRecord] = []
         self._next_feedback_id = 1
@@ -50,6 +62,15 @@ class FakeApiState:
 
     def list_motif_resets(self, limit=50, offset=0):
         return self.resets[offset:offset + limit]
+
+    def list_motif_completions_since(self, min_id, limit=100):
+        return sorted((c for c in self.completions if c.id > min_id), key=lambda c: c.id)[:limit]
+
+    def list_motif_resets_since(self, min_id, limit=100):
+        return sorted((r for r in self.resets if r.id > min_id), key=lambda r: r.id)[:limit]
+
+    def list_entity_scores_since(self, min_updated_at, limit=100):
+        return [u for u in self.score_updates if u.updated_at > min_updated_at][:limit]
 
     def list_motif_feedback(self, limit=50, offset=0):
         return list(reversed(self.feedback))[offset:offset + limit]
@@ -97,7 +118,10 @@ def fake_forensics():
 
 
 @pytest.fixture
-def client(fake_state, fake_forensics):
+def client(fake_state, fake_forensics, tmp_path):
+    audit_path = tmp_path / "audit.log"
+    app.dependency_overrides[deps.audit_log_path] = lambda: audit_path
+    app.dependency_overrides[deps.get_stream_config] = lambda: StreamConfig(poll_interval_seconds=0.0, max_iterations=1)
     app.dependency_overrides[deps.get_reader] = lambda: fake_state
     app.dependency_overrides[deps.get_writer] = lambda: fake_state
     app.dependency_overrides[deps.get_forensics_api] = lambda: fake_forensics
@@ -259,3 +283,111 @@ def test_health_reports_ok_when_everything_reachable(client, monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+# --- F0.8: GET /api/audit/log -----------------------------------------------------
+
+
+def test_audit_log_empty_when_file_missing(client):
+    response = client.get("/api/audit/log")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["items"] == []
+    assert body["total"] == 0
+
+
+def test_audit_log_lists_newest_first(client, tmp_path):
+    sink = FileAuditSink(tmp_path / "audit.log")
+    sink.write({"type": "prune", "edge_id": "a", "logged_at": 1.0})
+    sink.write({"type": "motif_reset", "chain_key": "k", "logged_at": 2.0})
+
+    response = client.get("/api/audit/log")
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert [i["type"] for i in items] == ["motif_reset", "prune"]
+
+
+def test_audit_log_filters_by_type_and_since(client):
+    sink = FileAuditSink(app.dependency_overrides[deps.audit_log_path]())
+    sink.write({"type": "prune", "edge_id": "a", "logged_at": 1.0})
+    sink.write({"type": "prune", "edge_id": "b", "logged_at": 5.0})
+    sink.write({"type": "motif_reset", "chain_key": "k", "logged_at": 5.0})
+
+    response = client.get("/api/audit/log?type=prune&since=2.0")
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert len(items) == 1
+    assert items[0]["edge_id"] == "b"
+
+
+def test_audit_log_paginates(client):
+    sink = FileAuditSink(app.dependency_overrides[deps.audit_log_path]())
+    for i in range(5):
+        sink.write({"type": "prune", "edge_id": f"e{i}", "logged_at": float(i)})
+
+    response = client.get("/api/audit/log?limit=2&offset=0")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 5
+    assert len(body["items"]) == 2
+    assert body["items"][0]["edge_id"] == "e4"
+
+
+# --- F0.10: GET /api/stream/events -------------------------------------------------
+
+
+def _parse_sse(text):
+    events = []
+    for block in text.strip().split("\n\n"):
+        if not block.strip():
+            continue
+        lines = block.splitlines()
+        event = next(line.split(": ", 1)[1] for line in lines if line.startswith("event: "))
+        data = next(line.split(": ", 1)[1] for line in lines if line.startswith("data: "))
+        events.append((event, json.loads(data)))
+    return events
+
+
+def test_stream_events_emits_pending_motif_completion_and_heartbeat(client, fake_state):
+    fake_state.completions = [
+        MotifCompletionRecord(id=1, motif_name="lateral_pivot", chain_key="Machine:C1042", matched_edges=["e1"], completed_at=1.0, confidence=1.0),
+    ]
+
+    response = client.get("/api/stream/events")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    events = _parse_sse(response.text)
+    types = [e for e, _ in events]
+    assert "motif_completion" in types
+    assert "heartbeat" in types
+    completion = next(payload for e, payload in events if e == "motif_completion")
+    assert completion["motif_name"] == "lateral_pivot"
+
+
+def test_stream_events_emits_pending_prune_from_audit_log(client):
+    sink = FileAuditSink(app.dependency_overrides[deps.audit_log_path]())
+    sink.write({"type": "prune", "edge_id": "e1", "src": "User:a", "dst": "Machine:b", "logged_at": time.time() + 10})
+
+    response = client.get("/api/stream/events")
+
+    events = _parse_sse(response.text)
+    prune_events = [payload for e, payload in events if e == "prune"]
+    assert len(prune_events) == 1
+    assert prune_events[0]["edge_id"] == "e1"
+
+
+def test_stream_events_emits_entity_score_update(client, fake_state):
+    fake_state.score_updates = [
+        EntityScoreUpdate(result=InferenceResult(entity_id="User:alice", score=3.5, t=1.0, trigger="scheduled"), updated_at=time.time()),
+    ]
+
+    response = client.get("/api/stream/events")
+
+    events = _parse_sse(response.text)
+    scores = [payload for e, payload in events if e == "inference_result"]
+    assert len(scores) == 1
+    assert scores[0]["entity_id"] == "User:alice"

@@ -195,6 +195,60 @@ def test_motif_feedback_without_analyst_leaves_null_attribution():
 
 
 @requires_postgres
+def test_motif_completions_since_returns_only_newer_rows_ascending():
+    """F0.10's SSE poll cursor: `since`-by-id, ascending, not the DESC
+    "recent page" `list_motif_completions` returns for a one-shot listing."""
+    writer = ApiStateWriter(get_connection)
+    reader = ApiStateReader(get_connection)
+    writer.record_motif_completion(MotifCompletionEvent("lateral_pivot", "Machine:C1042", ["e1"], 1.0))
+    writer.record_motif_completion(MotifCompletionEvent("admin_share_escalation", "User:svc", ["e2"], 2.0))
+    first_id = reader.list_motif_completions(limit=10)[-1].id  # oldest of the two just written
+
+    records = reader.list_motif_completions_since(first_id)
+
+    assert len(records) == 1
+    assert records[0].motif_name == "admin_share_escalation"
+
+
+@requires_postgres
+def test_motif_completions_since_zero_returns_everything():
+    writer = ApiStateWriter(get_connection)
+    reader = ApiStateReader(get_connection)
+    writer.record_motif_completion(MotifCompletionEvent("lateral_pivot", "Machine:C1042", ["e1"], 1.0))
+
+    assert len(reader.list_motif_completions_since(0)) == 1
+
+
+@requires_postgres
+def test_motif_resets_since_returns_only_newer_rows():
+    writer = ApiStateWriter(get_connection)
+    reader = ApiStateReader(get_connection)
+    writer.record_motif_reset(MotifResetEvent("lateral_pivot", "Machine:C1042", "e1", ["e1"], 1.0))
+    writer.record_motif_reset(MotifResetEvent("lateral_pivot", "Machine:C1043", "e2", ["e2"], 2.0))
+    first_id = reader.list_motif_resets(limit=10)[-1].id
+
+    records = reader.list_motif_resets_since(first_id)
+
+    assert len(records) == 1
+    assert records[0].triggering_edge_id == "e2"
+
+
+@requires_postgres
+def test_entity_scores_since_returns_only_rows_updated_after_cursor():
+    writer = ApiStateWriter(get_connection)
+    reader = ApiStateReader(get_connection)
+    writer.record_entity_score(InferenceResult(entity_id="User:alice", score=1.0, t=1.0, trigger="scheduled"))
+    cursor = time.time()
+    writer.record_entity_score(InferenceResult(entity_id="User:bob", score=2.0, t=2.0, trigger="scheduled"))
+
+    updates = reader.list_entity_scores_since(cursor)
+
+    assert len(updates) == 1
+    assert updates[0].result.entity_id == "User:bob"
+    assert updates[0].updated_at > cursor
+
+
+@requires_postgres
 def test_alert_acknowledgement_round_trip():
     writer = ApiStateWriter(get_connection)
     reader = ApiStateReader(get_connection)

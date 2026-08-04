@@ -1,6 +1,6 @@
 import json
 
-from t_gnn.audit import AuditLogger, FileAuditSink, InMemoryAuditSink
+from t_gnn.audit import AuditLogger, FileAuditSink, InMemoryAuditSink, read_records
 from t_gnn.motif_engine import MotifResetBus, MotifResetEvent
 from t_gnn.pruning import PruneEventBus, PrunedEdgeEvent
 from t_gnn.schema import Edge
@@ -111,3 +111,55 @@ def test_file_sink_creates_parent_directories(tmp_path):
     path = tmp_path / "nested" / "dirs" / "log.jsonl"
     FileAuditSink(path)
     assert path.parent.is_dir()
+
+
+# --- read_records (tasks.md F0.8) ------------------------------------------------
+
+
+def test_read_records_missing_file_returns_empty_list(tmp_path):
+    assert read_records(tmp_path / "does-not-exist.log") == []
+
+
+def test_read_records_returns_newest_first(tmp_path):
+    path = tmp_path / "audit.log"
+    sink = FileAuditSink(path)
+    sink.write({"type": "prune", "edge_id": "a", "logged_at": 1.0})
+    sink.write({"type": "prune", "edge_id": "b", "logged_at": 2.0})
+    sink.write({"type": "prune", "edge_id": "c", "logged_at": 3.0})
+
+    records = read_records(path)
+
+    assert [r["edge_id"] for r in records] == ["c", "b", "a"]
+
+
+def test_read_records_filters_by_since(tmp_path):
+    path = tmp_path / "audit.log"
+    sink = FileAuditSink(path)
+    sink.write({"type": "prune", "edge_id": "a", "logged_at": 1.0})
+    sink.write({"type": "prune", "edge_id": "b", "logged_at": 2.0})
+    sink.write({"type": "prune", "edge_id": "c", "logged_at": 3.0})
+
+    records = read_records(path, since=2.0)
+
+    assert {r["edge_id"] for r in records} == {"b", "c"}
+
+
+def test_read_records_filters_by_type(tmp_path):
+    path = tmp_path / "audit.log"
+    sink = FileAuditSink(path)
+    sink.write({"type": "prune", "edge_id": "a", "logged_at": 1.0})
+    sink.write({"type": "motif_reset", "chain_key": "k", "logged_at": 2.0})
+
+    records = read_records(path, record_type="motif_reset")
+
+    assert len(records) == 1
+    assert records[0]["chain_key"] == "k"
+
+
+def test_read_records_skips_blank_lines(tmp_path):
+    path = tmp_path / "audit.log"
+    path.write_text('{"type": "prune", "edge_id": "a", "logged_at": 1.0}\n\n', encoding="utf-8")
+
+    records = read_records(path)
+
+    assert len(records) == 1

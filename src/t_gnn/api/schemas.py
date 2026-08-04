@@ -120,6 +120,29 @@ class MotifConfigOut(BaseModel):
     steps: list[MotifStepOut]
 
 
+class AuditRecordOut(BaseModel):
+    """Mirrors `audit.py`'s two record shapes (`log_prune`/`log_motif_reset`)
+    -- fields not applicable to a given `type` are `None` rather than the
+    endpoint returning two different response shapes."""
+
+    type: Literal["prune", "motif_reset"]
+    logged_at: float
+    # prune fields
+    edge_id: Optional[str] = None
+    src: Optional[str] = None
+    dst: Optional[str] = None
+    edge_type: Optional[str] = None
+    protocol: Optional[str] = None
+    w_at_prune: Optional[float] = None
+    pruned_at: Optional[float] = None
+    # motif_reset fields
+    motif_name: Optional[str] = None
+    chain_key: Optional[str] = None
+    triggering_edge_id: Optional[str] = None
+    matched_edges: Optional[list[str]] = None
+    reset_at: Optional[float] = None
+
+
 class HealthOut(BaseModel):
     status: Literal["ok", "degraded"]
     postgres: bool
