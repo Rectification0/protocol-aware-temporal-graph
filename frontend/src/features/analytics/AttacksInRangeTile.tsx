@@ -16,7 +16,7 @@ const TOTAL_ONLY_PAGE: PaginationState = { pageIndex: 0, pageSize: 1 }
 // total, not a page-bounded estimate.
 export function AttacksInRangeTile() {
   const range = useTimeRangeStore((state) => state.range)
-  const completions = useMotifCompletions(TOTAL_ONLY_PAGE, undefined, range)
+  const completions = useMotifCompletions(TOTAL_ONLY_PAGE, { range })
   const count = completions.isSuccess ? completions.total : null
 
   return (

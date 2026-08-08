@@ -1,6 +1,6 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import type { PaginationState } from '@tanstack/react-table'
-import { listEntityScores } from '@/api/endpoints'
+import { getEntityScore, listEntityScores } from '@/api/endpoints'
 import { queryKeys } from '@/api/queryKeys'
 import { toOffsetParams, toPaginatedResult } from '@/hooks/api/pagination'
 import type { TimeRange } from '@/store/timeRangeStore'
@@ -24,4 +24,17 @@ export function useEntityScores(pagination: PaginationState, range?: TimeRange) 
     placeholderData: keepPreviousData,
   })
   return { ...query, ...toPaginatedResult(query.data, params) }
+}
+
+// F10.3: a point lookup for one entity's latest score -- the User
+// Investigation page's risk-score display. A 404 ("never scored") is a
+// real, expected outcome the generic retry policy (F4.4) already
+// declines to retry, same as `usePrunedEdge`'s expected-404 case.
+export function useEntityScore(entityId: string) {
+  return useQuery({
+    queryKey: queryKeys.entityScore(entityId),
+    queryFn: ({ signal }) => getEntityScore(entityId, signal),
+    enabled: Boolean(entityId),
+    staleTime: 5_000,
+  })
 }

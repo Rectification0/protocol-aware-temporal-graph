@@ -7,10 +7,12 @@ export const queryKeys = {
   metricsSnapshot: () => ['metrics', 'snapshot'] as const,
   entityScores: (params: { limit: number; offset: number; start?: number; end?: number }) =>
     ['scores', 'entities', params] as const,
+  entityScore: (entityId: string) => ['scores', 'entities', entityId] as const,
   motifCompletions: (params: {
     limit: number
     offset: number
     motifName?: string
+    chainKey?: string
     start?: number
     end?: number
   }) => ['motifs', 'completions', params] as const,
@@ -27,4 +29,6 @@ export const queryKeys = {
   health: () => ['health'] as const,
   // F8.4: no params -- there is exactly one "latest" report file.
   pilotReport: () => ['pilot', 'latest-report'] as const,
+  entities: (params: { type?: string; limit: number; offset: number }) =>
+    ['entities', params] as const,
 }

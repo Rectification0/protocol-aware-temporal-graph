@@ -5,16 +5,33 @@ import { queryKeys } from '@/api/queryKeys'
 import { toOffsetParams, toPaginatedResult } from '@/hooks/api/pagination'
 import type { TimeRange } from '@/store/timeRangeStore'
 
-// F4.2/F4.5: F9's Detection Matrix. `motifName` filters to one motif
-// definition (e.g. drilling into `lateral_pivot` only); omit for all.
-// `range` (F8.1, optional) threads `start`/`end` through to the backend --
-// see `useEntityScores`'s matching doc comment.
+export interface UseMotifCompletionsOptions {
+  /** Filters to one motif definition (e.g. `lateral_pivot` only); omit for all. */
+  motifName?: string
+  /** F10.5: filters to completions pivoting on one entity -- the User
+   * Investigation page's "triggered rules" panel. */
+  chainKey?: string
+  /** F8.1: threads `start`/`end` through to the backend -- see
+   * `useEntityScores`'s matching doc comment. */
+  range?: TimeRange
+}
+
+// F4.2/F4.5: F9's Detection Matrix, F10's per-entity "triggered rules."
+// An options object (rather than positional params) since this now has
+// three independent, all-optional filters -- positional args stopped
+// scaling once F10.5 added a third.
 export function useMotifCompletions(
   pagination: PaginationState,
-  motifName?: string,
-  range?: TimeRange,
+  options: UseMotifCompletionsOptions = {},
 ) {
-  const params = { ...toOffsetParams(pagination), motifName, start: range?.start, end: range?.end }
+  const { motifName, chainKey, range } = options
+  const params = {
+    ...toOffsetParams(pagination),
+    motifName,
+    chainKey,
+    start: range?.start,
+    end: range?.end,
+  }
   const query = useQuery({
     queryKey: queryKeys.motifCompletions(params),
     queryFn: ({ signal }) => listMotifCompletions({ ...params, signal }),

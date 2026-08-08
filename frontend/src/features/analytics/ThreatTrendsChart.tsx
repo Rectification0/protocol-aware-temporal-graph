@@ -19,7 +19,7 @@ const SCORE_SAMPLE_PAGE: PaginationState = { pageIndex: 0, pageSize: 500 }
 // it, via F5.5's `TimeSeriesChart`.
 export function ThreatTrendsChart() {
   const range = useTimeRangeStore((state) => state.range)
-  const completions = useMotifCompletions(COMPLETIONS_SAMPLE_PAGE, undefined, range)
+  const completions = useMotifCompletions(COMPLETIONS_SAMPLE_PAGE, { range })
   const scores = useEntityScores(SCORE_SAMPLE_PAGE, range)
 
   const isLoading = completions.isLoading || scores.isLoading

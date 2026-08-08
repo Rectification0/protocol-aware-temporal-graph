@@ -62,19 +62,23 @@ class FakeApiState:
     def count_entity_scores(self, start=None, end=None):
         return len(self._scores_in_range(start, end))
 
-    def _completions_matching(self, motif_name=None, start=None, end=None):
+    def get_entity_score(self, entity_id):
+        return next((s for s in self.scores if s.entity_id == entity_id), None)
+
+    def _completions_matching(self, motif_name=None, chain_key=None, start=None, end=None):
         return [
             c for c in self.completions
             if (motif_name is None or c.motif_name == motif_name)
+            and (chain_key is None or c.chain_key == chain_key)
             and (start is None or c.completed_at >= start)
             and (end is None or c.completed_at <= end)
         ]
 
-    def list_motif_completions(self, limit=50, offset=0, motif_name=None, start=None, end=None):
-        return self._completions_matching(motif_name, start, end)[offset:offset + limit]
+    def list_motif_completions(self, limit=50, offset=0, motif_name=None, chain_key=None, start=None, end=None):
+        return self._completions_matching(motif_name, chain_key, start, end)[offset:offset + limit]
 
-    def count_motif_completions(self, motif_name=None, start=None, end=None):
-        return len(self._completions_matching(motif_name, start, end))
+    def count_motif_completions(self, motif_name=None, chain_key=None, start=None, end=None):
+        return len(self._completions_matching(motif_name, chain_key, start, end))
 
     def list_motif_resets(self, limit=50, offset=0):
         return self.resets[offset:offset + limit]
@@ -115,12 +119,22 @@ class FakeForensicsApi:
     def __init__(self):
         self.records: list[PrunedEdgeRecord] = []
         self.by_id: dict = {}
+        self.entities: list[str] = []
 
     def reconstruct_activity(self, entity_id, start, end):
         return self.records
 
     def get_edge(self, edge_id):
         return self.by_id.get(edge_id)
+
+    def _entities_matching(self, type_prefix=None):
+        return [e for e in self.entities if type_prefix is None or e.startswith(type_prefix)]
+
+    def list_entities(self, type_prefix=None, limit=50, offset=0):
+        return sorted(self._entities_matching(type_prefix))[offset:offset + limit]
+
+    def count_entities(self, type_prefix=None):
+        return len(self._entities_matching(type_prefix))
 
 
 @pytest.fixture
@@ -204,6 +218,19 @@ def test_entity_scores_start_end_filters_and_returns_exact_total(client, fake_st
     assert body["total"] == 1  # F8.1: total is exact once a range is applied
 
 
+def test_get_entity_score_found(client, fake_state):
+    fake_state.scores = [InferenceResult(entity_id="User:alice", score=4.2, t=100.0, trigger="scheduled")]
+    response = client.get("/api/scores/entities/User:alice")
+    assert response.status_code == 200
+    assert response.json()["score"] == 4.2
+
+
+def test_get_entity_score_404_when_never_scored(client):
+    response = client.get("/api/scores/entities/User:nobody")
+    assert response.status_code == 404
+    assert "User:nobody" in response.json()["error"]["message"]
+
+
 def test_motif_completions_filter_by_name(client, fake_state):
     fake_state.completions = [
         MotifCompletionRecord(id=1, motif_name="lateral_pivot", chain_key="Machine:C1042", matched_edges=["e1"], completed_at=1.0, confidence=1.0),
@@ -228,6 +255,18 @@ def test_motif_completions_start_end_filters_and_returns_exact_total(client, fak
     body = response.json()
     assert [item["chain_key"] for item in body["items"]] == ["Machine:C2"]
     assert body["total"] == 1  # F8.3's "number of attacks" needs this exact, not a page-bounded count
+
+
+def test_motif_completions_filter_by_chain_key_returns_exact_total(client, fake_state):
+    fake_state.completions = [
+        MotifCompletionRecord(id=1, motif_name="lateral_pivot", chain_key="Machine:C1", matched_edges=["e1"], completed_at=1.0, confidence=1.0),
+        MotifCompletionRecord(id=2, motif_name="lateral_pivot", chain_key="Machine:C2", matched_edges=["e2"], completed_at=2.0, confidence=1.0),
+    ]
+    response = client.get("/api/motifs/completions?chain_key=Machine:C1")
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["chain_key"] for item in body["items"]] == ["Machine:C1"]
+    assert body["total"] == 1  # F10.5: a specific entity's full trigger history needs an exact count
 
 
 def test_motif_resets_listing(client, fake_state):
@@ -279,6 +318,22 @@ def test_forensics_get_edge_not_found(client):
     response = client.get("/api/forensics/edge/nonexistent")
     assert response.status_code == 404
     assert "nonexistent" in response.json()["error"]["message"]
+
+
+def test_list_entities_filters_by_type_prefix_and_sorts(client, fake_forensics):
+    fake_forensics.entities = ["User:bob", "User:alice", "Machine:C1042"]
+    response = client.get("/api/entities?type=User")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["items"] == ["User:alice", "User:bob"]
+    assert body["total"] == 2
+
+
+def test_list_entities_unfiltered_returns_every_type(client, fake_forensics):
+    fake_forensics.entities = ["User:alice", "Machine:C1042"]
+    response = client.get("/api/entities")
+    assert response.status_code == 200
+    assert response.json()["total"] == 2
 
 
 def test_config_protocols_reads_real_registry(client):

@@ -118,6 +118,40 @@ def test_reconstruct_activity_empty_for_entity_with_no_pruned_edges():
 
 
 @requires_neo4j
+def test_list_entities_filters_by_type_prefix_and_sorts():
+    """tasks.md F10.1. Uses a per-test-unique prefix (not just "User:")
+    as the query's own `type_prefix` so this assertion is isolated from
+    whatever other `User:*` entities already exist in the shared dev
+    Neo4j instance from other tests/pipeline runs."""
+    suffix = id(object())
+    prefix = f"User:list-entities-{suffix}-"
+    edge = _edge(src=f"{prefix}b", dst=f"{prefix}a", t_e=1.0)
+
+    with Neo4jColdStorageWriter(TEST_CONFIG) as writer:
+        writer.write(edge, w_at_prune=0.01, pruned_at=1.0)
+
+    with Neo4jForensicQueryAPI(TEST_CONFIG) as api:
+        entities = api.list_entities(type_prefix=prefix)
+
+    assert entities == [f"{prefix}a", f"{prefix}b"]  # sorted, not insertion order
+
+
+@requires_neo4j
+def test_count_entities_matches_list_entities_length():
+    suffix = id(object())
+    prefix = f"User:count-entities-{suffix}-"
+    edge = _edge(src=f"{prefix}a", dst=f"Machine:count-entities-{suffix}", t_e=1.0)
+
+    with Neo4jColdStorageWriter(TEST_CONFIG) as writer:
+        writer.write(edge, w_at_prune=0.01, pruned_at=1.0)
+
+    with Neo4jForensicQueryAPI(TEST_CONFIG) as api:
+        assert api.count_entities(type_prefix=prefix) == 1
+        assert api.count_entities(type_prefix=f"Machine:count-entities-{suffix}") == 1
+        assert api.count_entities(type_prefix=f"nonexistent-{suffix}") == 0
+
+
+@requires_neo4j
 def test_forensic_query_api_creates_additional_indexes():
     with Neo4jForensicQueryAPI(TEST_CONFIG) as api:
         with api._driver.session() as session:  # noqa: SLF001 -- test-only introspection

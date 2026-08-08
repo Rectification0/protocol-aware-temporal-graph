@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from t_gnn.api.deps import get_reader, require_postgres
 from t_gnn.api.schemas import EntityScoreOut, Paginated
@@ -40,3 +40,14 @@ def list_entity_scores(
     items = [EntityScoreOut(**r.__dict__) for r in results]
     total = require_postgres(lambda: reader.count_entity_scores(start=start, end=end)) if (start is not None or end is not None) else None
     return Paginated[EntityScoreOut](items=items, limit=limit, offset=offset, total=total)
+
+
+@router.get("/entities/{entity_id}", response_model=EntityScoreOut)
+def get_entity_score(entity_id: str, reader: ApiStateReader = Depends(get_reader)) -> EntityScoreOut:
+    """tasks.md F10.3: a point lookup, added for the User Investigation
+    page's risk-score display -- a specific entity may not appear in
+    `list_entity_scores`'s |score|-ranked, `limit`-bounded page at all."""
+    result = require_postgres(lambda: reader.get_entity_score(entity_id))
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No score recorded for entity {entity_id}")
+    return EntityScoreOut(**result.__dict__)

@@ -13,7 +13,7 @@ const TOTAL_ONLY_PAGE: PaginationState = { pageIndex: 0, pageSize: 1 }
 // motif-completion count `AttacksInRangeTile` (F8.3) already fetches.
 export function ThreatRateTile() {
   const range = useTimeRangeStore((state) => state.range)
-  const completions = useMotifCompletions(TOTAL_ONLY_PAGE, undefined, range)
+  const completions = useMotifCompletions(TOTAL_ONLY_PAGE, { range })
   const rate =
     completions.isSuccess && completions.total !== null
       ? computeRatePerHour(completions.total, range.start, range.end)

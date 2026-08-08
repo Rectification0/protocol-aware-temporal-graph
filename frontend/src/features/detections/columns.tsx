@@ -1,12 +1,14 @@
 import type { ColumnDef } from '@tanstack/react-table'
-import { formatDistanceToNowStrict } from 'date-fns'
-import { Button } from '@/components/ui/button'
+import { Link } from 'react-router-dom'
+import { RelativeTimestamp } from '@/components/relative-timestamp'
 import {
   DispositionBadge,
   InvestigationStatusBadge,
   SeverityBadge,
   type FeedbackDisposition,
 } from '@/components/severity-badge'
+import { Button } from '@/components/ui/button'
+import { investigationPath } from '@/config/routes'
 import type { DetectionRow } from '@/features/detections/logic'
 import { useSubmitMotifFeedback } from '@/hooks/api'
 import { useAuthStore } from '@/store/authStore'
@@ -74,15 +76,6 @@ function DispositionCell({ row }: { row: DetectionRow }) {
   )
 }
 
-function TimestampCell({ timestamp }: { timestamp: number }) {
-  const date = new Date(timestamp * 1000)
-  return (
-    <span title={date.toLocaleString()}>
-      {formatDistanceToNowStrict(date, { addSuffix: true })}
-    </span>
-  )
-}
-
 // F9.1: severity, confidence score, detection category, detection model,
 // timestamp, source, status (F9.5's disposition), investigation status.
 export const detectionColumns: ColumnDef<DetectionRow, unknown>[] = [
@@ -121,12 +114,22 @@ export const detectionColumns: ColumnDef<DetectionRow, unknown>[] = [
   {
     accessorKey: 'timestamp',
     header: 'Timestamp',
-    cell: ({ row }) => <TimestampCell timestamp={row.original.timestamp} />,
+    cell: ({ row }) => <RelativeTimestamp seconds={row.original.timestamp} />,
   },
   {
     accessorKey: 'source',
     header: 'Source',
-    cell: ({ row }) => <code className="text-xs">{row.original.source}</code>,
+    // F10.2's drill-down destination -- routes.ts's own comment already
+    // describes `/investigation/:entityId` as "reached from elsewhere,"
+    // and a detection's source entity is exactly that "elsewhere."
+    cell: ({ row }) => (
+      <Link
+        to={investigationPath(row.original.source)}
+        className="font-mono text-xs text-primary underline-offset-2 hover:underline"
+      >
+        {row.original.source}
+      </Link>
+    ),
   },
   {
     id: 'status',

@@ -63,6 +63,8 @@ describe('router (authenticated)', () => {
     expect(await screen.findByRole('heading', { name: 'Overview' })).toBeInTheDocument()
     expect(screen.getByText('T-GNN SOC Dashboard')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Analytics' })).toBeInTheDocument()
+    // F10.1: the new Users nav entry.
+    expect(screen.getByRole('link', { name: 'Users' })).toBeInTheDocument()
   })
 
   it('renders the Analytics page at /analytics', async () => {
@@ -71,6 +73,12 @@ describe('router (authenticated)', () => {
     // Milestone F7 replaced this page's placeholder heading with the
     // real Threat Analytics page.
     expect(await screen.findByRole('heading', { name: 'Threat Analytics' })).toBeInTheDocument()
+  })
+
+  it('renders the Users list page at /investigation', async () => {
+    renderAt('/investigation')
+
+    expect(await screen.findByRole('heading', { name: 'Users' })).toBeInTheDocument()
   })
 
   it('renders the Investigation page with the :entityId param at /investigation/:entityId', async () => {

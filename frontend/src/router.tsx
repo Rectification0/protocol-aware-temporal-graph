@@ -28,6 +28,10 @@ export const routes: RouteObject[] = [
         children: [
           { index: true, lazy: () => import('@/pages/HomePage') },
           { path: 'analytics', lazy: () => import('@/pages/AnalyticsPage') },
+          // F10.1: the user-list page, a sibling of the F10.2 detail
+          // route below rather than a new top-level path -- see
+          // `config/routes.ts`'s `ROUTES.users` comment.
+          { path: 'investigation', lazy: () => import('@/pages/UserListPage') },
           { path: 'investigation/:entityId', lazy: () => import('@/pages/InvestigationPage') },
           { path: 'detections', lazy: () => import('@/pages/DetectionsPage') },
           { path: 'logs', lazy: () => import('@/pages/LogsPage') },

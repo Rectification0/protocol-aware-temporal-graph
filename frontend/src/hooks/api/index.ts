@@ -4,6 +4,7 @@
 export * from '@/hooks/api/useAlertAck'
 export * from '@/hooks/api/useAuditLog'
 export * from '@/hooks/api/useConfig'
+export * from '@/hooks/api/useEntities'
 export * from '@/hooks/api/useEntityForensics'
 export * from '@/hooks/api/useEntityScores'
 export * from '@/hooks/api/useHealth'

@@ -43,6 +43,20 @@ MATCH (src:Entity)-[r:PRUNED_EDGE {edge_id: $edge_id}]->(dst:Entity)
 RETURN src.id AS src_id, dst.id AS dst_id, r AS rel
 """
 
+_LIST_ENTITIES_QUERY = """
+MATCH (e:Entity)
+WHERE $type_prefix IS NULL OR e.id STARTS WITH $type_prefix
+RETURN DISTINCT e.id AS id
+ORDER BY e.id
+SKIP $offset LIMIT $limit
+"""
+
+_COUNT_ENTITIES_QUERY = """
+MATCH (e:Entity)
+WHERE $type_prefix IS NULL OR e.id STARTS WITH $type_prefix
+RETURN count(DISTINCT e.id) AS count
+"""
+
 
 @dataclass(frozen=True)
 class PrunedEdgeRecord:
@@ -109,6 +123,25 @@ class Neo4jForensicQueryAPI:
         if record is None:
             return None
         return PrunedEdgeRecord._from_neo4j(record["src_id"], record["dst_id"], record["rel"])
+
+    def list_entities(self, type_prefix: Optional[str] = None, limit: int = 50, offset: int = 0) -> list[str]:
+        """tasks.md F10.1: distinct known entity ids, e.g. every `User:*`
+        node for the User Investigation list page. This process never
+        holds a live `ActiveGraphStore` (F0's decoupled-process
+        architecture), so unlike that task's other named option, this
+        reads Neo4j's distinct `Entity` nodes instead -- an honest
+        consequence: an entity with only currently-active (not-yet-pruned)
+        edges has no `Entity` node here yet and won't appear until at
+        least one of its edges is pruned."""
+        with self._driver.session(database=self.config.database) as session:
+            records = session.run(_LIST_ENTITIES_QUERY, type_prefix=type_prefix, offset=offset, limit=limit)
+            return [r["id"] for r in records]
+
+    def count_entities(self, type_prefix: Optional[str] = None) -> int:
+        """Companion to `list_entities` -- an exact `COUNT(*)` for F10.1's
+        paginated list envelope."""
+        with self._driver.session(database=self.config.database) as session:
+            return session.run(_COUNT_ENTITIES_QUERY, type_prefix=type_prefix).single()["count"]
 
     def close(self) -> None:
         self._driver.close()

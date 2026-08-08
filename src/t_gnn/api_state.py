@@ -468,23 +468,48 @@ class ApiStateReader:
                 cur.execute("SELECT count(*) FROM entity_scores" + clause, tuple(params))
                 return cur.fetchone()[0]
 
+    def get_entity_score(self, entity_id: str) -> Optional[InferenceResult]:
+        """tasks.md F10.3: a single entity's latest recorded score --
+        `entity_id` is `entity_scores`' primary key (upserted, latest-value
+        -only per this file's module docstring), so this is a point
+        lookup, not a search within `list_entity_scores`'s |score|-ranked,
+        `limit`-bounded page (which could miss a low-magnitude entity
+        entirely). `None` if this entity has never been scored."""
+        with self._connection_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT entity_id, score, t, trigger, motif_name FROM entity_scores WHERE entity_id = %s",
+                    (entity_id,),
+                )
+                row = cur.fetchone()
+        if row is None:
+            return None
+        return InferenceResult(entity_id=row[0], score=row[1], t=row[2], trigger=row[3], motif_name=row[4])
+
     def list_motif_completions(
         self,
         limit: int = 50,
         offset: int = 0,
         motif_name: Optional[str] = None,
+        chain_key: Optional[str] = None,
         start: Optional[float] = None,
         end: Optional[float] = None,
     ) -> list[MotifCompletionRecord]:
         """`start`/`end` (tasks.md F8.1, inclusive) filter on
         `completed_at` -- unlike `entity_scores`, `motif_completions` is an
         append-only log (every completion is inserted, never upserted), so
-        this count/window is exact, not a latest-value proxy."""
+        this count/window is exact, not a latest-value proxy. `chain_key`
+        (tasks.md F10.5) is the entity a completion pivots on -- filtering
+        by it is how the User Investigation page finds every motif this
+        entity has ever triggered, not just whatever's in a recent sample."""
         query = "SELECT id, motif_name, chain_key, matched_edges, completed_at, confidence FROM motif_completions"
         clauses, params = _time_range_conditions("completed_at", start, end)
         if motif_name is not None:
             clauses.append("motif_name = %s")
             params.append(motif_name)
+        if chain_key is not None:
+            clauses.append("chain_key = %s")
+            params.append(chain_key)
         if clauses:
             query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY completed_at DESC LIMIT %s OFFSET %s"
@@ -501,6 +526,7 @@ class ApiStateReader:
     def count_motif_completions(
         self,
         motif_name: Optional[str] = None,
+        chain_key: Optional[str] = None,
         start: Optional[float] = None,
         end: Optional[float] = None,
     ) -> int:
@@ -510,6 +536,9 @@ class ApiStateReader:
         if motif_name is not None:
             clauses.append("motif_name = %s")
             params.append(motif_name)
+        if chain_key is not None:
+            clauses.append("chain_key = %s")
+            params.append(chain_key)
         query = "SELECT count(*) FROM motif_completions"
         if clauses:
             query += " WHERE " + " AND ".join(clauses)

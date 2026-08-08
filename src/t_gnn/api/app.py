@@ -30,7 +30,19 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from t_gnn.api.routers import alerts, audit, config, forensics, health, metrics, motifs, pilot, scores, stream
+from t_gnn.api.routers import (
+    alerts,
+    audit,
+    config,
+    entities,
+    forensics,
+    health,
+    metrics,
+    motifs,
+    pilot,
+    scores,
+    stream,
+)
 
 
 def create_app() -> FastAPI:
@@ -65,6 +77,7 @@ def create_app() -> FastAPI:
     app.include_router(audit.router)
     app.include_router(stream.router)
     app.include_router(pilot.router)
+    app.include_router(entities.router)
 
     return app
 

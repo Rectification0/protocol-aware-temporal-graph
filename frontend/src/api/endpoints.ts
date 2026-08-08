@@ -52,16 +52,26 @@ export function listEntityScores({
   })
 }
 
+// F10.3: a point lookup, added for the User Investigation page's risk-
+// score display -- a specific entity may not appear at all in
+// `listEntityScores`'s |score|-ranked, `limit`-bounded page.
+export function getEntityScore(entityId: string, signal?: AbortSignal) {
+  return apiRequest<EntityScoreOut>(`/api/scores/entities/${encodeURIComponent(entityId)}`, {
+    signal,
+  })
+}
+
 export function listMotifCompletions({
   limit,
   offset,
   motifName,
+  chainKey,
   start,
   end,
   signal,
-}: PageParams & TimeRangeParams & { motifName?: string } = {}) {
+}: PageParams & TimeRangeParams & { motifName?: string; chainKey?: string } = {}) {
   return apiRequest<Paginated<MotifCompletionOut>>('/api/motifs/completions', {
-    query: { limit, offset, motif_name: motifName, start, end },
+    query: { limit, offset, motif_name: motifName, chain_key: chainKey, start, end },
     signal,
   })
 }
@@ -121,6 +131,15 @@ export function listAuditLog({
 }: PageParams & { since?: number; type?: AuditRecordType } = {}) {
   return apiRequest<Paginated<AuditRecordOut>>('/api/audit/log', {
     query: { limit, offset, since, type },
+    signal,
+  })
+}
+
+// F10.1: distinct known entity ids -- `type` is a node-id type prefix
+// (e.g. "User" matches "User:*"), for the User Investigation user list.
+export function listEntities({ type, limit, offset, signal }: PageParams & { type?: string } = {}) {
+  return apiRequest<Paginated<string>>('/api/entities', {
+    query: { type, limit, offset },
     signal,
   })
 }

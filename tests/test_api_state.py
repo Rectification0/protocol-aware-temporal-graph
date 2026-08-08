@@ -129,6 +129,24 @@ def test_entity_scores_start_end_filters_on_t_and_count_matches():
 
 
 @requires_postgres
+def test_get_entity_score_round_trip():
+    writer = ApiStateWriter(get_connection)
+    reader = ApiStateReader(get_connection)
+    writer.record_entity_score(InferenceResult(entity_id="User:alice", score=4.2, t=100.0, trigger="scheduled"))
+
+    result = reader.get_entity_score("User:alice")
+
+    assert result is not None
+    assert result.score == 4.2
+
+
+@requires_postgres
+def test_get_entity_score_none_when_never_scored():
+    reader = ApiStateReader(get_connection)
+    assert reader.get_entity_score("User:nobody") is None
+
+
+@requires_postgres
 def test_motif_completion_round_trip():
     writer = ApiStateWriter(get_connection)
     reader = ApiStateReader(get_connection)
@@ -173,6 +191,19 @@ def test_motif_completions_start_end_filters_on_completed_at_and_count_matches()
     assert reader.count_motif_completions(start=150.0, end=250.0) == 1
     assert reader.count_motif_completions() == 3
     assert reader.count_motif_completions(motif_name="admin_share_escalation") == 0
+
+
+@requires_postgres
+def test_motif_completions_filters_by_chain_key():
+    writer = ApiStateWriter(get_connection)
+    reader = ApiStateReader(get_connection)
+    writer.record_motif_completion(MotifCompletionEvent("lateral_pivot", "Machine:C1", ["e1"], 1.0))
+    writer.record_motif_completion(MotifCompletionEvent("lateral_pivot", "Machine:C2", ["e2"], 2.0))
+
+    records = reader.list_motif_completions(limit=10, chain_key="Machine:C1")
+
+    assert [r.chain_key for r in records] == ["Machine:C1"]
+    assert reader.count_motif_completions(chain_key="Machine:C1") == 1
 
 
 @requires_postgres

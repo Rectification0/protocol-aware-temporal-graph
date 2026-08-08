@@ -166,6 +166,32 @@ fabricate interactivity. Filtering/sorting (F9.6) reuse F5.6's `FilterBar`
 and F5.4's `DataTable`'s already-generic column sort, needing no new
 table-level code.
 
+## User Investigation (Milestone F10)
+
+`src/pages/UserListPage.tsx` (F10.1, new route `/investigation`) +
+`src/pages/InvestigationPage.tsx` (F10.2-F10.9, existing route
+`/investigation/:entityId`), backed by `src/features/investigation/`.
+This process never holds a live `ActiveGraphStore` (F0's decoupled-process
+architecture), so the user list is sourced from Neo4j cold storage
+instead — a new `GET /api/entities` endpoint reading distinct `Entity`
+nodes — meaning an entity with only currently-active (not-yet-pruned)
+edges hasn't reached cold storage yet and won't appear. F10.3/F10.5 each
+needed a small real backend addition too: a point-lookup
+`GET /api/scores/entities/{entity_id}` (an existing paginated, |score|-
+ranked page could miss a specific entity entirely) and a `chain_key`
+filter on `/api/motifs/completions` (so "triggered rules" finds _every_
+motif this entity has triggered, not whatever an unfiltered sample
+contains). `useMotifCompletions()`'s signature changed from positional
+optional params to one options object once this added a third
+independent filter — every existing call site was updated, no behavior
+change. F10.4/F10.6 are deliberately the exact same panel ("Activity
+Timeline / Log History"), not two, per tasks.md's own instruction not to
+imply a second data source that doesn't exist. F10.7-F10.9 are
+`BackendPendingState` panels naming F0.13 — F10.9 in particular declines
+to fabricate any derived session-boundary heuristic, per that task's own
+explicit instruction. `RelativeTimestamp` (`src/components/`) was
+extracted here from a duplicate helper F9's Detection Matrix already had.
+
 ## Commands
 
 ```bash
