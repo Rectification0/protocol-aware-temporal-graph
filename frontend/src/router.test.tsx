@@ -97,6 +97,14 @@ describe('router (authenticated)', () => {
     expect(await screen.findByRole('heading', { name: 'Logs' })).toBeInTheDocument()
   })
 
+  it('renders the Monitoring page at /monitoring', async () => {
+    renderAt('/monitoring')
+
+    // Milestone F13 replaced this page's placeholder heading with the
+    // real Live Monitoring page.
+    expect(await screen.findByRole('heading', { name: 'Live Monitoring' })).toBeInTheDocument()
+  })
+
   it('renders NotFoundPage for an unmatched path under the shell', async () => {
     renderAt('/this-route-does-not-exist')
 

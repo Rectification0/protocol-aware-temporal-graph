@@ -241,6 +241,29 @@ proxy, since neither endpoint carries a literal `dst` field), and
 automatically as the motif library grows). No backend changes were needed
 this milestone.
 
+## Live Monitoring (Milestone F13)
+
+No backend changes — every task consumes API surface F0/F4 already
+exposed. The real fix: `useLiveStream()` (F4.6) used to only be mounted by
+the Analytics page's live attack counter, so F6/F9's tiles never actually
+received a live push despite reading the exact query keys the stream
+already invalidates. `src/components/AppShell.tsx` now owns a single SSE
+connection for the whole authenticated app; the live attack counter reads
+the same shared store instead of opening a second connection. A new
+`src/features/monitoring/` folder holds: `LiveEventFeed` (a raw,
+scrollable feed of every stream event), `CriticalAlertsPanel` (the
+`AlertBanner`-rendered critical-severity subset, reusing Milestone F9's
+severity classification), `NotificationsPanel` (a bell icon + unread
+badge in the Navbar, reachable from every page) with a paired
+`useLiveNotifications()` effect hook that toasts new alerts, and
+`AckButton` (F13.6's frontend half — the backend ack endpoint landed back
+in Milestone F0). Acknowledgement state is honestly session-scoped: the
+ack endpoint is POST-only with no way to read it back, so a
+`alertAckStore` tracks it client-side, updated on each mutation's
+success. `src/store/autoRefreshStore.ts` backs a shared polling toggle +
+interval control on the Live Monitoring page for the two endpoints
+(metrics snapshot, health) with no matching live-stream event type.
+
 ## Commands
 
 ```bash
