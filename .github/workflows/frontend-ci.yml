@@ -21,6 +21,14 @@ defaults:
 jobs:
   build-lint-test:
     runs-on: ubuntu-latest
+    env:
+      # `src/config/env.ts` throws at import time if this is unset (by
+      # design -- see that file's own comment) so any real backend URL
+      # can never be silently defaulted to. CI has no `.env.local` (it's
+      # gitignored, dev-machine-specific), so every test/build step needs
+      # this set explicitly; the value itself is never dereferenced in CI
+      # since no test hits a real network.
+      VITE_API_BASE_URL: "http://127.0.0.1:8000"
     steps:
       - uses: actions/checkout@v4
 
