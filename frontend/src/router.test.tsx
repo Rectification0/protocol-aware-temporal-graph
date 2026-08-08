@@ -68,7 +68,9 @@ describe('router (authenticated)', () => {
   it('renders the Analytics page at /analytics', async () => {
     renderAt('/analytics')
 
-    expect(await screen.findByRole('heading', { name: 'Analytics' })).toBeInTheDocument()
+    // Milestone F7 replaced this page's placeholder heading with the
+    // real Threat Analytics page.
+    expect(await screen.findByRole('heading', { name: 'Threat Analytics' })).toBeInTheDocument()
   })
 
   it('renders the Investigation page with the :entityId param at /investigation/:entityId', async () => {

@@ -96,6 +96,24 @@ small tonal-dot component for infra/monitoring status, distinct from
 F5.14's `SeverityBadge` (a different vocabulary — threat severity, not
 system health).
 
+## Threat Analytics (Milestone F7)
+
+`src/pages/AnalyticsPage.tsx` (previously a Milestone-F12 placeholder) is
+the second data-driven page, backed by a new `src/features/analytics/`
+folder following F6's same pure-logic-plus-components split.
+`logic.ts`'s score-magnitude tiers (`benign`/`suspicious`/`malicious`,
+F7.1/F7.3) deliberately reuse F6.2's exact interim-proxy thresholds under
+new names rather than a second set of unreviewed magic numbers — still
+provisional pending F0.12, and the UI itself (`UserThreatCountsPanel`'s
+caption), not just code comments, says so. F7.2's trend chart and F7.4's
+live attack counter are documented in `logic.ts` as honest snapshot-in-
+time proxies, not true histories, given `entity_scores`'s
+upserted/latest-value-only shape. `LiveAttackCounter.tsx` is F4.6's SSE
+stream's first real mount — ahead of Milestone F13's broader live-wiring
+pass — which required two test-infra fixes: a no-op `EventSource` stub in
+`src/test/setup.ts` (jsdom has none) and a `vite.config.ts` `testTimeout`
+bump to clear a latent race with `setup.ts`'s own `asyncUtilTimeout`.
+
 ## Commands
 
 ```bash
