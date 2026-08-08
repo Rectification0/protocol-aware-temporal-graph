@@ -143,6 +143,29 @@ timeout vs. `@testing-library/react`'s own internal polling budget) —
 still at its old value. Both are now set with a comfortable margin
 between them (`asyncUtilTimeout` 20000ms, `testTimeout` 25000ms).
 
+## Detection Matrix (Milestone F9)
+
+`src/pages/DetectionsPage.tsx` + `src/features/detections/` — a new page,
+no backend changes needed (F0.3/F0.4/F9.5's feedback endpoint already
+covered everything). `logic.ts` merges both detection paths into one
+`DetectionRow` shape: motif completions (F9.2, direct field mapping) and
+`trigger === "scheduled"` entity scores past the same non-benign bar F7.1
+already uses (F9.3) — a `motif_completion`-triggered rescoring is
+excluded since it's a side effect of a completion already listed, not a
+second detection. Severity (F5.14's 5-tier vocabulary) floors motif-path
+confidence at "medium" (a structural match is never low-severity) and
+interpolates F6.2/F7.1's exact thresholds for the anomaly path, anchored
+so the "worth listing at all" cutoff matches F7.1's "non-benign" bar
+exactly. `columns.tsx`'s `DispositionCell` is F9.5's real writable
+half — TP/FP buttons via F4's existing `useSubmitMotifFeedback()` — for
+motif-path rows only, since `motif_feedback` has no schema concept for
+the anomaly path (those rows show an explanatory "n/a" instead).
+Investigation status is a static "New" badge everywhere: F5.14's own
+comment already says no backend field for it exists, so this doesn't
+fabricate interactivity. Filtering/sorting (F9.6) reuse F5.6's `FilterBar`
+and F5.4's `DataTable`'s already-generic column sort, needing no new
+table-level code.
+
 ## Commands
 
 ```bash
