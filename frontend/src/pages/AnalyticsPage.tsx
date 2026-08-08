@@ -1,12 +1,17 @@
 import { TimeRangeFilter } from '@/components/time-range-filter'
+import { AttackFrequencyHeatmap } from '@/features/analytics/AttackFrequencyHeatmap'
+import { AttackPatternsChart } from '@/features/analytics/AttackPatternsChart'
 import { AttacksInRangeTile } from '@/features/analytics/AttacksInRangeTile'
 import { AvgAnomaliesPerHourTile } from '@/features/analytics/AvgAnomaliesPerHourTile'
+import { DetectionAccuracyChart } from '@/features/analytics/DetectionAccuracyChart'
 import { DetectionRateTile } from '@/features/analytics/DetectionRateTile'
+import { GeographicAttackMapCard } from '@/features/analytics/GeographicAttackMapCard'
 import { HackersDetectedTile } from '@/features/analytics/HackersDetectedTile'
 import { LiveAttackCounter } from '@/features/analytics/LiveAttackCounter'
 import { ThreatRateTile } from '@/features/analytics/ThreatRateTile'
 import { ThreatSeverityChart } from '@/features/analytics/ThreatSeverityChart'
 import { ThreatTrendsChart } from '@/features/analytics/ThreatTrendsChart'
+import { TopTargetedResourcesChart } from '@/features/analytics/TopTargetedResourcesChart'
 import { UserThreatCountsPanel } from '@/features/analytics/UserThreatCountsPanel'
 
 // Milestone F7 (Threat Analytics) assembled the first content on this
@@ -16,10 +21,17 @@ import { UserThreatCountsPanel } from '@/features/analytics/UserThreatCountsPane
 // the page) -- which F7.1-F7.3's tiles now read from too, see each of
 // their own comments -- plus five range-scoped metrics (F8.2-F8.5).
 // F7.4's live attack counter is unaffected: a rolling "now" window, not a
-// historical range, so F8.1 doesn't apply to it. Milestone F12 (the rest
-// of this page's charts -- detection accuracy, geographic map, heatmap,
-// top-targeted resources, attack-pattern breakdown) builds further onto
-// this same page/layout.
+// historical range, so F8.1 doesn't apply to it. Milestone F12
+// (Analytics Visualizations) added the "Visualizations" section below:
+// F12.3's detection accuracy chart, F12.5's geographic-map stub, F12.6's
+// attack-frequency heatmap, F12.7's top-targeted-resources chart, and
+// F12.8's attack-pattern breakdown. F12.1 (threat timeline) and F12.4
+// (severity pie chart) needed no new component -- they're exactly
+// `ThreatTrendsChart` (F7.2) and `ThreatSeverityChart` (F7.3) above,
+// already on this page; F12.2 (attacks-per-day) is the same reasoning
+// applied to `ThreatTrendsChart`'s own `attacks` series rather than a
+// second, near-duplicate day-bucketed chart -- see tasks.md's F12.1/
+// F12.2/F12.4 lines for the full reasoning.
 export function Component() {
   return (
     <section className="space-y-4">
@@ -43,6 +55,17 @@ export function Component() {
         <ThreatRateTile />
         <DetectionRateTile />
         <AvgAnomaliesPerHourTile />
+      </div>
+
+      <h2 className="text-lg font-semibold">Visualizations</h2>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <DetectionAccuracyChart />
+        <GeographicAttackMapCard />
+        <AttackFrequencyHeatmap />
+        <TopTargetedResourcesChart />
+        <div className="lg:col-span-2">
+          <AttackPatternsChart />
+        </div>
       </div>
     </section>
   )

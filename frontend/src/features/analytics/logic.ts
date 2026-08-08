@@ -1,7 +1,7 @@
 import { format } from 'date-fns'
 import { SECURITY_LEVEL_THRESHOLDS } from '@/features/dashboard/logic'
 import type { LiveStreamEvent } from '@/store/liveStreamStore'
-import type { EntityScoreOut, MotifCompletionOut } from '@/types/api'
+import type { EntityScoreOut, MotifCompletionOut, PilotReportOut } from '@/types/api'
 
 // F7 (Threat Analytics). Pure/testable derivations live here, same split
 // `features/dashboard/logic.ts` established for F6 -- the components in
@@ -203,4 +203,146 @@ export function computeLiveAttackCount(
     (event) =>
       event.type === 'motif_completion' && (anchorMs - event.receivedAt) / 1000 <= windowSeconds,
   ).length
+}
+
+// --- F12.3: detection accuracy chart --------------------------------------
+//
+// `pilot.py`'s real precision/recall (F8.4's `usePilotReport`), reshaped
+// into chart-ready percentage rows. Same "not live, as of last pilot
+// evaluation" posture `DetectionRateTile` (F8.4) already established for
+// this same report -- this chart is the fuller breakdown of the same data,
+// not a second, disagreeing source.
+
+export type DetectionAccuracyRow = { label: string; value: number }
+
+const DETECTION_ACCURACY_METRICS: {
+  path: 'anomaly' | 'motif'
+  metric: 'precision' | 'recall'
+  label: string
+}[] = [
+  { path: 'anomaly', metric: 'precision', label: 'Anomaly precision' },
+  { path: 'anomaly', metric: 'recall', label: 'Anomaly recall' },
+  { path: 'motif', metric: 'precision', label: 'Motif precision' },
+  { path: 'motif', metric: 'recall', label: 'Motif recall' },
+]
+
+/** A `null` metric (`pilot.py`'s `DetectionMetricsOut` -- a zero-denominator
+ * precision/recall, e.g. no positive predictions at all) is dropped
+ * rather than charted as a misleading 0%. */
+export function buildDetectionAccuracyRows(report: PilotReportOut): DetectionAccuracyRow[] {
+  const rows: DetectionAccuracyRow[] = []
+  for (const { path, metric, label } of DETECTION_ACCURACY_METRICS) {
+    const value = report[path][metric]
+    if (value !== null) rows.push({ label, value: value * 100 })
+  }
+  return rows
+}
+
+// --- F12.6: attack-frequency heatmap (time-of-day x day-of-week) ---------
+//
+// Combines F0.4 motif completions and F0.3's non-benign entity scores
+// (the same "attacks" definition `buildThreatTrendSeries` above already
+// uses for its `attacks`/`highRiskEntities` series) into one UTC
+// day-of-week x hour-of-day frequency grid for `HeatmapChart` (F5.5). UTC
+// or an analyst-local wall-clock read would drift depending on the
+// browser -- an int derived from a unix timestamp via `getUTCDay()`/
+// `getUTCHours()` doesn't, so every analyst sees the same grid regardless
+// of their own timezone.
+
+export const DAY_OF_WEEK_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const
+export const HOUR_OF_DAY_LABELS = Array.from({ length: 24 }, (_, hour) =>
+  hour.toString().padStart(2, '0'),
+)
+
+export interface AttackFrequencyGrid {
+  rowLabels: string[]
+  columnLabels: string[]
+  values: number[][]
+}
+
+export function buildAttackFrequencyGrid(
+  completions: MotifCompletionOut[],
+  scores: EntityScoreOut[],
+): AttackFrequencyGrid {
+  const values = DAY_OF_WEEK_LABELS.map(() => HOUR_OF_DAY_LABELS.map(() => 0))
+
+  function tally(unixSeconds: number): void {
+    const date = new Date(unixSeconds * 1000)
+    values[date.getUTCDay()][date.getUTCHours()] += 1
+  }
+
+  for (const completion of completions) tally(completion.completed_at)
+  for (const score of scores) {
+    if (classifyEntityScore(score.score) === 'benign') continue
+    tally(score.t)
+  }
+
+  return { rowLabels: [...DAY_OF_WEEK_LABELS], columnLabels: HOUR_OF_DAY_LABELS, values }
+}
+
+// --- F12.7: top targeted resources ----------------------------------------
+//
+// tasks.md's own line names a literal `dst` field, but neither
+// `MotifCompletionOut` nor `EntityScoreOut` (the two endpoints this chart
+// is scoped to, per its own "Depends on: F0.4, F0.3") carries one -- `dst`
+// only exists on `Edge`/`PrunedEdgeRecord`, reachable only via a
+// per-matched-edge forensics lookup that would mean N+1 requests on every
+// chart render. The closest honest proxy from data this page already
+// fetches: a completion's `chain_key` when it's a Machine (the pivot/
+// target machine for seed motifs like `lateral_pivot`) and a non-benign
+// score's `entity_id` when it's a Machine.
+
+const MACHINE_ENTITY_PREFIX = 'Machine:'
+
+// A `type` for the same implicit-index-signature reason as
+// `SeverityDistributionSlice`/`ThreatTrendPoint` above.
+export type TargetedResourceCount = {
+  resource: string
+  count: number
+}
+
+export function buildTopTargetedResources(
+  completions: MotifCompletionOut[],
+  scores: EntityScoreOut[],
+  limit = 10,
+): TargetedResourceCount[] {
+  const counts = new Map<string, number>()
+
+  function bump(entityId: string): void {
+    if (!entityId.startsWith(MACHINE_ENTITY_PREFIX)) return
+    counts.set(entityId, (counts.get(entityId) ?? 0) + 1)
+  }
+
+  for (const completion of completions) bump(completion.chain_key)
+  for (const score of scores) {
+    if (classifyEntityScore(score.score) === 'benign') continue
+    bump(score.entity_id)
+  }
+
+  return [...counts.entries()]
+    .map(([resource, count]) => ({ resource, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, limit)
+}
+
+// --- F12.8: most common attack patterns -----------------------------------
+//
+// Tallies motif completions by `motif_name` -- scales automatically to
+// whatever `config/motifs.yaml` defines (currently `lateral_pivot`/
+// `admin_share_escalation`, per tasks.md's Open Questions item on growing
+// the motif library) since nothing here hardcodes a motif name list.
+
+export type AttackPatternCount = {
+  motifName: string
+  count: number
+}
+
+export function buildAttackPatternCounts(completions: MotifCompletionOut[]): AttackPatternCount[] {
+  const counts = new Map<string, number>()
+  for (const completion of completions) {
+    counts.set(completion.motif_name, (counts.get(completion.motif_name) ?? 0) + 1)
+  }
+  return [...counts.entries()]
+    .map(([motifName, count]) => ({ motifName, count }))
+    .sort((a, b) => b.count - a.count)
 }

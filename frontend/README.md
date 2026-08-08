@@ -219,6 +219,28 @@ against the page's active search/type/entity/range criteria, and render
 prepended with a "New" pill plus a dismissible "N new events — Refresh"
 banner that triggers an explicit refetch.
 
+## Analytics Visualizations (Milestone F12)
+
+Adds a "Visualizations" section to the bottom of the Analytics page
+(`src/pages/AnalyticsPage.tsx`), backed by five new components in
+`src/features/analytics/`. Three of the eight tasks needed no new
+component at all: threat timeline, attacks-per-day, and severity pie
+chart are each already `ThreatTrendsChart`/`ThreatSeverityChart` from
+Milestone F7, already on this page — building a second, near-duplicate
+chart over the same data would just disagree with or duplicate it, so
+these are documented as reuse rather than rebuilt. The five real new
+charts: `DetectionAccuracyChart` (a four-bar precision/recall breakdown
+from `pilot.py`'s report, same "not live" caption as F8.4's
+`DetectionRateTile`), `GeographicAttackMapCard` (a `BackendPendingState`
+naming F0.14 — no fake map pins), `AttackFrequencyHeatmap` (a UTC
+day-of-week × hour-of-day frequency grid combining motif completions and
+non-benign scores), `TopTargetedResourcesChart` (tallies `Machine:*`
+entities from completions' `chain_key`/scores' `entity_id` — a documented
+proxy, since neither endpoint carries a literal `dst` field), and
+`AttackPatternsChart` (motif-completion counts by `motif_name`, scaling
+automatically as the motif library grows). No backend changes were needed
+this milestone.
+
 ## Commands
 
 ```bash

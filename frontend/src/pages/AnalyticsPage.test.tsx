@@ -22,8 +22,8 @@ function wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
 }
 
-describe('AnalyticsPage (Milestones F7 Threat Analytics + F8 Time-Based Analytics)', () => {
-  it('renders every F7/F8 panel plus the shared time-range filter', async () => {
+describe('AnalyticsPage (Milestones F7/F8/F12)', () => {
+  it('renders every F7/F8/F12 panel plus the shared time-range filter', async () => {
     vi.mocked(listEntityScores).mockResolvedValue({
       items: [] satisfies EntityScoreOut[],
       limit: 500,
@@ -60,5 +60,12 @@ describe('AnalyticsPage (Milestones F7 Threat Analytics + F8 Time-Based Analytic
     expect(screen.getByText('Threat Rate')).toBeInTheDocument()
     expect(screen.getByText('Detection Rate')).toBeInTheDocument()
     expect(screen.getByText('Avg. Anomalies / Hour')).toBeInTheDocument()
+    // F12.3, F12.5-F12.8.
+    expect(screen.getByText('Visualizations')).toBeInTheDocument()
+    expect(await screen.findByText('Detection Accuracy')).toBeInTheDocument()
+    expect(screen.getByText('Geographic Attack Map')).toBeInTheDocument()
+    expect(await screen.findByText('Attack Frequency (UTC)')).toBeInTheDocument()
+    expect(await screen.findByText('Top Targeted Resources')).toBeInTheDocument()
+    expect(await screen.findByText('Most Common Attack Patterns')).toBeInTheDocument()
   })
 })

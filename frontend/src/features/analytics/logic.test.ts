@@ -1,18 +1,24 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildAttackFrequencyGrid,
+  buildAttackPatternCounts,
+  buildDetectionAccuracyRows,
   buildSeverityDistribution,
   buildThreatTrendSeries,
+  buildTopTargetedResources,
   classifyEntityScore,
   computeLiveAttackCount,
   computeRatePerHour,
   countUserThreatTiers,
+  DAY_OF_WEEK_LABELS,
+  HOUR_OF_DAY_LABELS,
   isUserEntity,
   LIVE_ATTACK_WINDOW_SECONDS,
   THREAT_TIER_SCORE_THRESHOLDS,
   THREAT_TREND_BUCKET_COUNT,
 } from '@/features/analytics/logic'
 import type { LiveStreamEvent } from '@/store/liveStreamStore'
-import type { EntityScoreOut, MotifCompletionOut } from '@/types/api'
+import type { EntityScoreOut, MotifCompletionOut, PilotReportOut } from '@/types/api'
 
 function score(entityId: string, value: number, t = 0): EntityScoreOut {
   return { entity_id: entityId, score: value, t, trigger: 'scheduled', motif_name: null }
@@ -205,5 +211,163 @@ describe('computeLiveAttackCount', () => {
       },
     ]
     expect(computeLiveAttackCount(events, anchorMs)).toBe(0)
+  })
+})
+
+// --- F12.3: buildDetectionAccuracyRows ---------------------------------
+
+function pilotReport(overrides: Partial<PilotReportOut> = {}): PilotReportOut {
+  return {
+    anomaly: {
+      true_positives: 3,
+      false_positives: 1,
+      false_negatives: 0,
+      precision: 0.75,
+      recall: 1,
+    },
+    motif: {
+      true_positives: 2,
+      false_positives: 0,
+      false_negatives: 1,
+      precision: 1,
+      recall: 0.6667,
+    },
+    evaluated_at: 1000,
+    ...overrides,
+  }
+}
+
+describe('buildDetectionAccuracyRows', () => {
+  it('converts every non-null precision/recall into a percentage row', () => {
+    const rows = buildDetectionAccuracyRows(pilotReport())
+    expect(rows).toEqual([
+      { label: 'Anomaly precision', value: 75 },
+      { label: 'Anomaly recall', value: 100 },
+      { label: 'Motif precision', value: 100 },
+      { label: 'Motif recall', value: 66.67 },
+    ])
+  })
+
+  it('drops a null metric rather than charting it as 0%', () => {
+    const rows = buildDetectionAccuracyRows(
+      pilotReport({
+        anomaly: {
+          true_positives: 0,
+          false_positives: 0,
+          false_negatives: 0,
+          precision: null,
+          recall: null,
+        },
+      }),
+    )
+    expect(rows).toEqual([
+      { label: 'Motif precision', value: 100 },
+      { label: 'Motif recall', value: 66.67 },
+    ])
+  })
+})
+
+// --- F12.6: buildAttackFrequencyGrid ------------------------------------
+
+describe('buildAttackFrequencyGrid', () => {
+  it('produces a 7x24 grid with the correct dimensions', () => {
+    const grid = buildAttackFrequencyGrid([], [])
+    expect(grid.rowLabels).toEqual([...DAY_OF_WEEK_LABELS])
+    expect(grid.columnLabels).toEqual(HOUR_OF_DAY_LABELS)
+    expect(grid.values).toHaveLength(7)
+    expect(grid.values.every((row) => row.length === 24)).toBe(true)
+  })
+
+  it('buckets a motif completion by its UTC day-of-week and hour', () => {
+    // 2024-01-01T05:00:00Z is a Monday (index 1).
+    const t = Date.UTC(2024, 0, 1, 5) / 1000
+    const grid = buildAttackFrequencyGrid([completion(t)], [])
+    expect(grid.values[1][5]).toBe(1)
+    expect(grid.values.flat().reduce((a, b) => a + b, 0)).toBe(1)
+  })
+
+  it('buckets a non-benign score but ignores a benign one', () => {
+    const t = Date.UTC(2024, 0, 1, 5) / 1000
+    const malicious = THREAT_TIER_SCORE_THRESHOLDS.critical + 1
+    const grid = buildAttackFrequencyGrid(
+      [],
+      [score('User:alice', malicious, t), score('User:bob', 0, t)],
+    )
+    expect(grid.values[1][5]).toBe(1)
+  })
+})
+
+// --- F12.7: buildTopTargetedResources ------------------------------------
+
+function completionWith(overrides: Partial<MotifCompletionOut> = {}): MotifCompletionOut {
+  return {
+    id: 1,
+    motif_name: 'lateral_pivot',
+    chain_key: 'Machine:C1',
+    matched_edges: ['e1'],
+    completed_at: 0,
+    confidence: 1,
+    ...overrides,
+  }
+}
+
+describe('buildTopTargetedResources', () => {
+  it('tallies Machine chain_keys from completions and Machine entity_ids from non-benign scores', () => {
+    const malicious = THREAT_TIER_SCORE_THRESHOLDS.critical + 1
+    const rows = buildTopTargetedResources(
+      [completionWith({ chain_key: 'Machine:C1' }), completionWith({ chain_key: 'Machine:C1' })],
+      [score('Machine:C2', malicious), score('User:alice', malicious)],
+    )
+    expect(rows).toEqual([
+      { resource: 'Machine:C1', count: 2 },
+      { resource: 'Machine:C2', count: 1 },
+    ])
+  })
+
+  it('ignores non-Machine chain_keys/entity_ids and benign scores', () => {
+    const malicious = THREAT_TIER_SCORE_THRESHOLDS.critical + 1
+    const rows = buildTopTargetedResources(
+      [completionWith({ chain_key: 'User:service-account' })],
+      [score('Machine:C1', 0), score('User:alice', malicious)],
+    )
+    expect(rows).toEqual([])
+  })
+
+  it('sorts descending and respects the limit', () => {
+    const rows = buildTopTargetedResources(
+      [
+        completionWith({ chain_key: 'Machine:C1' }),
+        completionWith({ chain_key: 'Machine:C2' }),
+        completionWith({ chain_key: 'Machine:C2' }),
+      ],
+      [],
+      1,
+    )
+    expect(rows).toEqual([{ resource: 'Machine:C2', count: 2 }])
+  })
+})
+
+// --- F12.8: buildAttackPatternCounts --------------------------------------
+
+describe('buildAttackPatternCounts', () => {
+  it('tallies completions by motif_name, sorted descending', () => {
+    const rows = buildAttackPatternCounts([
+      completionWith({ motif_name: 'lateral_pivot' }),
+      completionWith({ motif_name: 'admin_share_escalation' }),
+      completionWith({ motif_name: 'lateral_pivot' }),
+    ])
+    expect(rows).toEqual([
+      { motifName: 'lateral_pivot', count: 2 },
+      { motifName: 'admin_share_escalation', count: 1 },
+    ])
+  })
+
+  it('scales to any motif name with no hardcoded list', () => {
+    const rows = buildAttackPatternCounts([completionWith({ motif_name: 'some_future_motif' })])
+    expect(rows).toEqual([{ motifName: 'some_future_motif', count: 1 }])
+  })
+
+  it('returns an empty array for no completions', () => {
+    expect(buildAttackPatternCounts([])).toEqual([])
   })
 })
