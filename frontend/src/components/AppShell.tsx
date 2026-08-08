@@ -4,6 +4,7 @@ import { Navbar } from '@/components/Navbar'
 import { Sidebar } from '@/components/Sidebar'
 import { useLiveNotifications } from '@/features/monitoring/useLiveNotifications'
 import { isSessionValid, useAuthStore } from '@/store/authStore'
+import { useAppliedTheme } from '@/store/themeStore'
 
 // F2.2: Navbar + Sidebar + content outlet. This is the root layout route
 // for every authenticated page -- /login (outside the shell) is not a
@@ -24,6 +25,10 @@ export function AppShell() {
   const hasSession = isSessionValid(useAuthStore((state) => state.session))
   useLiveStream({ enabled: hasSession })
   useLiveNotifications({ enabled: hasSession })
+  // F15.1: applies the Settings page's theme preference for the whole
+  // authenticated app; `/login` (outside this shell) keeps index.html's
+  // static default.
+  useAppliedTheme()
 
   return (
     <div className="flex min-h-svh flex-col">

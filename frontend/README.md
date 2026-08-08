@@ -282,6 +282,27 @@ computing analyst-ack latency from data F13.6's acknowledgements already
 carry -- the definition tasks.md's own line asked to be decided before
 building anything).
 
+## Settings (Milestone F15)
+
+A `/settings` page, no backend changes -- every setting is either a
+client-side preference or a read-only view of an already-existing
+endpoint. `src/features/settings/`: `ThemeSection` (F15.1), `NotificationSection`
+(F15.2), `ApiConfigSection` (F15.3, read-only), `AlertThresholdsSection`
+(F15.5, read-only tables over F0.9's `/api/config/protocols`/`/api/config/motifs`).
+F15.4 reuses Milestone F13.3's `AutoRefreshControl` directly rather than a
+second control. Three preferences persist across reloads (F15.6) via
+`zustand/middleware`'s `persist` (`localStorage`, keys prefixed `t-gnn-`):
+`src/store/themeStore.ts` (new -- `useAppliedTheme()`, mounted in
+`AppShell`, really does toggle `<html>`'s `.dark` class from the stored
+preference, though picking "Light" has no visible effect yet since
+`index.css`'s `:root`/`.dark` still share the same values pending
+Milestone F16.2's real light palette), `src/store/notificationSettingsStore.ts`
+(new -- which severities reach the notification bell/toasts, consumed via
+`features/monitoring/logic.ts`'s `filterEnabledAlertEvents`; Milestone
+F13.5's Critical Alerts panel is a separate, fixed critical-only subset
+and isn't affected), and `src/store/autoRefreshStore.ts` (F13.3,
+retrofitted with `persist` in this pass -- previously in-memory only).
+
 ## Commands
 
 ```bash

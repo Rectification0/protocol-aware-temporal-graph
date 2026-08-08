@@ -10,33 +10,39 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { AckButton } from '@/features/monitoring/AckButton'
 import {
-  countUnreadAlerts,
+  countUnreadEnabledAlerts,
   detectionRefFor,
-  filterAlertEvents,
+  filterEnabledAlertEvents,
   summarizeLiveEvent,
 } from '@/features/monitoring/logic'
 import { useLiveStreamStore } from '@/store/liveStreamStore'
+import { useNotificationSettingsStore } from '@/store/notificationSettingsStore'
 import { useNotificationsStore } from '@/store/notificationsStore'
 
 const MAX_RECENT_ALERTS = 10
 
 // F13.4: bell icon + unread badge in the Navbar, backed by F13.2's raw
 // event feed filtered to alert-worthy events (`features/monitoring/logic.ts`'s
-// `filterAlertEvents`) -- the same "only a real detection counts"
+// `filterEnabledAlertEvents`) -- the same "only a real detection counts"
 // definition F13.5's Critical Alerts panel and `useLiveNotifications`'s
-// toasts both already use. Rows are plain `div`s, not `DropdownMenuItem`s
-// -- Radix closes the menu on any item selection by default, which would
-// dismiss the whole panel the instant an analyst clicked F13.6's `AckButton`
-// inside one. Opening the dropdown marks every currently-seen alert read
-// (`markAllRead()`); "unread" is *when* an alert arrived relative to that,
-// not a persisted per-alert flag.
+// toasts both already use, further narrowed by F15.2's Settings-page
+// severity toggles (`notificationSettingsStore`). Rows are plain `div`s,
+// not `DropdownMenuItem`s -- Radix closes the menu on any item selection
+// by default, which would dismiss the whole panel the instant an analyst
+// clicked F13.6's `AckButton` inside one. Opening the dropdown marks every
+// currently-seen alert read (`markAllRead()`); "unread" is *when* an alert
+// arrived relative to that, not a persisted per-alert flag.
 export function NotificationsPanel() {
   const events = useLiveStreamStore((state) => state.events)
   const lastReadAt = useNotificationsStore((state) => state.lastReadAt)
   const markAllRead = useNotificationsStore((state) => state.markAllRead)
+  // F15.2: Settings-page-configurable severity filter -- defaults to every
+  // severity enabled, so this matches pre-F15 behavior until an analyst
+  // narrows it.
+  const enabledSeverities = useNotificationSettingsStore((state) => state.enabledSeverities)
 
-  const alerts = filterAlertEvents(events).slice(0, MAX_RECENT_ALERTS)
-  const unreadCount = countUnreadAlerts(events, lastReadAt)
+  const alerts = filterEnabledAlertEvents(events, enabledSeverities).slice(0, MAX_RECENT_ALERTS)
+  const unreadCount = countUnreadEnabledAlerts(events, lastReadAt, enabledSeverities)
 
   return (
     <DropdownMenu onOpenChange={(open) => open && markAllRead()}>

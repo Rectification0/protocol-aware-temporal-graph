@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react'
 import { toast } from '@/components/toast'
-import { filterAlertEvents, summarizeLiveEvent } from '@/features/monitoring/logic'
+import { filterEnabledAlertEvents, summarizeLiveEvent } from '@/features/monitoring/logic'
 import { useLiveStreamStore } from '@/store/liveStreamStore'
+import { useNotificationSettingsStore } from '@/store/notificationSettingsStore'
 
 export interface UseLiveNotificationsOptions {
   enabled?: boolean
@@ -22,6 +23,7 @@ export interface UseLiveNotificationsOptions {
 export function useLiveNotifications(options: UseLiveNotificationsOptions = {}) {
   const { enabled = true } = options
   const events = useLiveStreamStore((state) => state.events)
+  const enabledSeverities = useNotificationSettingsStore((state) => state.enabledSeverities)
   const lastNotifiedAtRef = useRef<number | null>(null)
 
   useEffect(() => {
@@ -33,7 +35,9 @@ export function useLiveNotifications(options: UseLiveNotificationsOptions = {}) 
     }
 
     const cutoff = lastNotifiedAtRef.current
-    const fresh = filterAlertEvents(events).filter((event) => event.receivedAt > cutoff)
+    const fresh = filterEnabledAlertEvents(events, enabledSeverities).filter(
+      (event) => event.receivedAt > cutoff,
+    )
     if (fresh.length === 0) return
 
     lastNotifiedAtRef.current = fresh[0].receivedAt
@@ -42,5 +46,5 @@ export function useLiveNotifications(options: UseLiveNotificationsOptions = {}) 
     for (const event of fresh.slice().reverse()) {
       toast(summarizeLiveEvent(event))
     }
-  }, [events, enabled])
+  }, [events, enabled, enabledSeverities])
 }

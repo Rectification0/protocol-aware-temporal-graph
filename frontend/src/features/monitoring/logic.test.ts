@@ -1,14 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import {
   ackKey,
+  ALERT_SEVERITIES,
   connectionStatusTone,
   countUnreadAlerts,
+  countUnreadEnabledAlerts,
   detectionRefFor,
   eventSeverity,
   eventTypeLabel,
   filterAlertEvents,
   filterCriticalEvents,
+  filterEnabledAlertEvents,
   isAlertEvent,
+  isEnabledAlertEvent,
   summarizeLiveEvent,
 } from '@/features/monitoring/logic'
 import { ANOMALY_SEVERITY_THRESHOLDS } from '@/features/detections/logic'
@@ -125,6 +129,36 @@ describe('countUnreadAlerts', () => {
       motifResetEvent(2000), // not an alert at all
     ]
     expect(countUnreadAlerts(events, 1000)).toBe(1)
+  })
+})
+
+describe('isEnabledAlertEvent / filterEnabledAlertEvents / countUnreadEnabledAlerts (F15.2)', () => {
+  const events = [
+    motifCompletionEvent({ confidence: 1, receivedAt: 2000 }), // critical
+    motifCompletionEvent({ confidence: 0.5, receivedAt: 500 }), // medium
+    inferenceResultEvent({ score: LOW_SCORE, receivedAt: 2000 }), // benign, never an alert
+  ]
+
+  it('with every severity enabled, matches filterAlertEvents/countUnreadAlerts exactly', () => {
+    expect(filterEnabledAlertEvents(events, ALERT_SEVERITIES)).toEqual(filterAlertEvents(events))
+    expect(countUnreadEnabledAlerts(events, 1000, ALERT_SEVERITIES)).toBe(
+      countUnreadAlerts(events, 1000),
+    )
+  })
+
+  it('excludes a severity the caller disabled', () => {
+    const criticalOnly = ALERT_SEVERITIES.filter((s) => s !== 'medium')
+    expect(filterEnabledAlertEvents(events, criticalOnly)).toHaveLength(1)
+    expect(isEnabledAlertEvent(events[1], criticalOnly)).toBe(false)
+  })
+
+  it('accepts a Set as well as an array', () => {
+    const criticalOnly = new Set<(typeof ALERT_SEVERITIES)[number]>(['critical'])
+    expect(filterEnabledAlertEvents(events, criticalOnly)).toHaveLength(1)
+  })
+
+  it('never enables a benign event regardless of the allowlist', () => {
+    expect(isEnabledAlertEvent(events[2], ALERT_SEVERITIES)).toBe(false)
   })
 })
 

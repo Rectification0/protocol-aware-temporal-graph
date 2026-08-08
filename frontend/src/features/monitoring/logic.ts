@@ -46,6 +46,44 @@ export function countUnreadAlerts(events: LiveStreamEvent[], lastReadAt: number)
   return filterAlertEvents(events).filter((event) => event.receivedAt > lastReadAt).length
 }
 
+// --- F15.2: notification-settings severity filter --------------------------
+//
+// The four severities `eventSeverity` can ever actually return (never
+// `'info'` -- see that function's own inference-result branch above, and
+// `severityFromMotifConfidence`'s "never lower than medium" floor). This
+// is the settings UI's checkbox list and `notificationSettingsStore`'s
+// default (all enabled), not a fifth, disagreeing severity vocabulary.
+
+export const ALERT_SEVERITIES: readonly ThreatSeverity[] = ['critical', 'high', 'medium', 'low']
+
+export function isEnabledAlertEvent(
+  event: LiveStreamEvent,
+  enabledSeverities: ReadonlySet<ThreatSeverity> | readonly ThreatSeverity[],
+): boolean {
+  const severity = eventSeverity(event)
+  if (severity === null) return false
+  return enabledSeverities instanceof Set
+    ? enabledSeverities.has(severity)
+    : (enabledSeverities as readonly ThreatSeverity[]).includes(severity)
+}
+
+export function filterEnabledAlertEvents(
+  events: LiveStreamEvent[],
+  enabledSeverities: ReadonlySet<ThreatSeverity> | readonly ThreatSeverity[],
+): LiveStreamEvent[] {
+  return events.filter((event) => isEnabledAlertEvent(event, enabledSeverities))
+}
+
+export function countUnreadEnabledAlerts(
+  events: LiveStreamEvent[],
+  lastReadAt: number,
+  enabledSeverities: ReadonlySet<ThreatSeverity> | readonly ThreatSeverity[],
+): number {
+  return filterEnabledAlertEvents(events, enabledSeverities).filter(
+    (event) => event.receivedAt > lastReadAt,
+  ).length
+}
+
 // --- F13.5: critical-only subset ------------------------------------------
 
 export function filterCriticalEvents(events: LiveStreamEvent[]): LiveStreamEvent[] {
