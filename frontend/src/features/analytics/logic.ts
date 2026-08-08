@@ -89,19 +89,21 @@ export function buildSeverityDistribution(scores: EntityScoreOut[]): SeverityDis
 
 // --- F7.2: threat trends over time ---------------------------------------
 //
-// F8.1's real time-range control doesn't exist yet -- fixed at the last
-// 24 hours in hourly buckets, a provisional window in the same spirit as
-// F6.3's `THREAT_STATUS_WINDOW_SECONDS`. Two series per bucket: `attacks`
-// (motif completions whose `completed_at` falls in the bucket) and
-// `highRiskEntities` (count of non-benign entity scores -- reusing the
-// F7.1/F7.3 tiers -- whose *latest* `t` falls in the bucket). The latter
-// is an honest snapshot-in-time proxy, not a true history: `entity_scores`
-// is upserted/latest-value-only (CLAUDE.md's F0 notes), so an entity whose
-// score last updated outside the visible sample never appears at all, and
-// one that's been high-risk for days only ever shows up in whichever
-// single bucket its most recent inference happened to land in.
+// F8.1 (Milestone F8) added the shared time-range filter this now reads
+// `start`/`end` from, replacing the fixed "last 24h" window this
+// originally shipped with -- a fixed bucket *count* (still 24) spread
+// evenly across whatever range is selected, so a 7-day selection buckets
+// by ~7h instead of trying to render 168 hourly bars. Two series per
+// bucket: `attacks` (motif completions whose `completed_at` falls in the
+// bucket) and `highRiskEntities` (count of non-benign entity scores --
+// reusing the F7.1/F7.3 tiers -- whose *latest* `t` falls in the bucket).
+// The latter is an honest snapshot-in-time proxy, not a true history:
+// `entity_scores` is upserted/latest-value-only (CLAUDE.md's F0 notes), so
+// an entity whose score last updated outside the selected range never
+// appears at all, and one that's been high-risk for days only ever shows
+// up in whichever single bucket its most recent inference happened to
+// land in.
 
-export const THREAT_TREND_BUCKET_SECONDS = 60 * 60
 export const THREAT_TREND_BUCKET_COUNT = 24
 
 // A `type` for the same implicit-index-signature reason as
@@ -113,37 +115,71 @@ export type ThreatTrendPoint = {
   highRiskEntities: number
 }
 
+const SHORT_RANGE_LABEL_THRESHOLD_SECONDS = 2 * 24 * 60 * 60
+
+/** Hourly-looking labels read fine for a short (<=2 day) selection, but
+ * turn into meaningless repeats once a bucket spans a day or more --
+ * switch to a date label once the selected range is that wide. */
+function formatBucketLabel(bucketStartSeconds: number, rangeSeconds: number): string {
+  const date = new Date(bucketStartSeconds * 1000)
+  return rangeSeconds <= SHORT_RANGE_LABEL_THRESHOLD_SECONDS
+    ? format(date, 'HH:mm')
+    : format(date, 'MMM d')
+}
+
 export function buildThreatTrendSeries(
   completions: MotifCompletionOut[],
   scores: EntityScoreOut[],
-  nowSeconds: number,
-  bucketSeconds: number = THREAT_TREND_BUCKET_SECONDS,
+  start: number,
+  end: number,
   bucketCount: number = THREAT_TREND_BUCKET_COUNT,
 ): ThreatTrendPoint[] {
-  const windowStart = nowSeconds - bucketSeconds * bucketCount
+  const rangeSeconds = Math.max(end - start, 1)
+  const bucketSeconds = rangeSeconds / bucketCount
   const buckets: ThreatTrendPoint[] = Array.from({ length: bucketCount }, (_, index) => {
-    const bucketStart = windowStart + index * bucketSeconds
+    const bucketStart = start + index * bucketSeconds
     return {
       bucketStart,
-      label: format(new Date(bucketStart * 1000), 'HH:mm'),
+      label: formatBucketLabel(bucketStart, rangeSeconds),
       attacks: 0,
       highRiskEntities: 0,
     }
   })
 
-  const bucketIndexFor = (t: number) => Math.floor((t - windowStart) / bucketSeconds)
+  // `start`/`end` are inclusive (matching the backend query params of the
+  // same name) -- a value exactly at `end` clamps into the last bucket
+  // rather than falling one past every bucket's exclusive-upper-bound math.
+  function bucketIndexFor(t: number): number | null {
+    if (t < start || t > end) return null
+    return Math.min(Math.floor((t - start) / bucketSeconds), bucketCount - 1)
+  }
 
   for (const completion of completions) {
     const index = bucketIndexFor(completion.completed_at)
-    if (index >= 0 && index < bucketCount) buckets[index].attacks += 1
+    if (index !== null) buckets[index].attacks += 1
   }
   for (const score of scores) {
     if (classifyEntityScore(score.score) === 'benign') continue
     const index = bucketIndexFor(score.t)
-    if (index >= 0 && index < bucketCount) buckets[index].highRiskEntities += 1
+    if (index !== null) buckets[index].highRiskEntities += 1
   }
 
   return buckets
+}
+
+// --- F8.4/F8.5: rate metrics over the selected range ---------------------
+//
+// Shared by F8.4's threat rate (attacks/hour) and F8.5's average
+// anomalies per hour (entity-score volume/hour) -- both are "count of X
+// in the selected [start,end] / the range's duration in hours."
+
+const SECONDS_PER_HOUR = 60 * 60
+
+/** `null` for a zero-or-negative-duration range, rather than dividing by
+ * zero or returning a misleading `Infinity`. */
+export function computeRatePerHour(count: number, start: number, end: number): number | null {
+  const hours = (end - start) / SECONDS_PER_HOUR
+  return hours > 0 ? count / hours : null
 }
 
 // --- F7.4: live attack counter --------------------------------------------

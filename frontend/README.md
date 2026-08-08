@@ -114,6 +114,35 @@ pass — which required two test-infra fixes: a no-op `EventSource` stub in
 `src/test/setup.ts` (jsdom has none) and a `vite.config.ts` `testTimeout`
 bump to clear a latent race with `setup.ts`'s own `asyncUtilTimeout`.
 
+## Time-Based Analytics (Milestone F8)
+
+Still `AnalyticsPage.tsx` — F8 adds a shared time-range filter and five
+range-scoped metrics on top of F7's page, not a new route. `src/store/
+timeRangeStore.ts` (Zustand) holds the selected `{start, end}` (unix
+seconds); `src/components/time-range-filter.tsx` adapts it to F5.8's
+`DateRangePicker`, which already implemented every preset this needed —
+no changes to that component. This required a real backend change first:
+`/api/scores/entities`/`/api/motifs/completions` gained optional
+`start`/`end` query params plus an exact `COUNT(*)`-backed `total` when
+either is supplied (unfiltered requests still get `total: null`, so F6/F7's
+original call sites are unaffected). F7's own tiles were updated to read
+the shared range too — `ThreatTrendsChart`'s bucket math was generalized
+from a fixed "24 hourly buckets" to a fixed bucket _count_ spread evenly
+across whatever range is selected. F8.4's "detection rate" needed a
+second backend addition: `GET /api/pilot/latest-report`, reading whatever
+file `pilot.py --output` was pointed at (`PILOT_REPORT_PATH`, default
+`pilot-report.json`) rather than importing `pilot.py` itself, keeping the
+API process decoupled from that batch tool's heavier import graph.
+
+Landing F8.1 hit the same class of flake F6.7/F7 each already fixed a
+different root cause of, made worse by `AnalyticsPage`'s now-heavier
+dependency graph: raising `vite.config.ts`'s `testTimeout` alone (tried
+first) didn't help, because the actual bottleneck was `src/test/
+setup.ts`'s `asyncUtilTimeout` — a different knob (the outer per-test
+timeout vs. `@testing-library/react`'s own internal polling budget) —
+still at its old value. Both are now set with a comfortable margin
+between them (`asyncUtilTimeout` 20000ms, `testTimeout` 25000ms).
+
 ## Commands
 
 ```bash

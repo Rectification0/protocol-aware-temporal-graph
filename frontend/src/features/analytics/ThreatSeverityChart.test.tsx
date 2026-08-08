@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { THREAT_TIER_SCORE_THRESHOLDS } from '@/features/analytics/logic'
+import { useTimeRangeStore } from '@/store/timeRangeStore'
 import type { EntityScoreOut, Paginated } from '@/types/api'
 
 vi.mock('@/api/endpoints', () => ({
@@ -54,5 +55,20 @@ describe('ThreatSeverityChart', () => {
     render(<ThreatSeverityChart />, { wrapper })
 
     expect(await screen.findByText('No detections yet')).toBeInTheDocument()
+  })
+
+  it('F8.1: fetches scores scoped to the selected range', async () => {
+    useTimeRangeStore.setState({ range: { start: 111, end: 222 } })
+    vi.mocked(listEntityScores).mockResolvedValue({
+      items: [],
+      limit: 500,
+      offset: 0,
+      total: null,
+    } satisfies Paginated<EntityScoreOut>)
+
+    render(<ThreatSeverityChart />, { wrapper })
+
+    await waitFor(() => expect(listEntityScores).toHaveBeenCalled())
+    expect(listEntityScores).toHaveBeenCalledWith(expect.objectContaining({ start: 111, end: 222 }))
   })
 })

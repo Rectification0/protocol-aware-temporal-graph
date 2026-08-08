@@ -9,7 +9,21 @@ import '@testing-library/jest-dom/vitest'
 // the default here (rather than passing `{ timeout }` at every call site)
 // only makes tests more patient; a passing assertion still resolves as
 // soon as its condition is met.
-configure({ asyncUtilTimeout: 5000 })
+//
+// Milestone F8's `AnalyticsPage` route grew heavy enough (Recharts +
+// `react-day-picker` + nine feature components, several other test files
+// now transforming that same heavy dependency graph concurrently) that
+// the original 5000ms bump started missing under a full-suite run --
+// `router.test.tsx`'s unauthenticated `/analytics` case still has to
+// resolve that route's `lazy` module during navigation matching even
+// though `ProtectedRoute` ends up redirecting before rendering it.
+// `vite.config.ts`'s `testTimeout` (a *different* knob -- the outer
+// per-test safety net, not this library's own internal polling budget)
+// was raised first and didn't help, which is what actually pinned this
+// down: `asyncUtilTimeout` itself was the real bottleneck, not the outer
+// timeout racing it as it was the first time this class of flake showed
+// up (F7's fix). Raised well past observed worst-case import time.
+configure({ asyncUtilTimeout: 20_000 })
 
 // jsdom has no native `EventSource` (`api/liveStream.test.ts`'s own doc
 // comment already notes this for its hand-injected fake). Milestone F7.4

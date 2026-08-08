@@ -6,9 +6,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { tileUnavailableMessage } from '@/features/dashboard/logic'
 import { buildSeverityDistribution } from '@/features/analytics/logic'
 import { useEntityScores } from '@/hooks/api'
+import { useTimeRangeStore } from '@/store/timeRangeStore'
 
 // Same sample-size caveat as `UserThreatCountsPanel` -- top-500 by
-// |score|, not every entity ever seen.
+// |score| within F8.1's selected range, not every entity ever seen.
 const SCORE_SAMPLE_PAGE: PaginationState = { pageIndex: 0, pageSize: 500 }
 
 // Severity here maps directly onto `status-pill.tsx`'s success/warning/error
@@ -26,7 +27,8 @@ const TIER_COLOR: Record<string, string> = {
 // the sample, not just users. Same threshold-provisionality caveat as
 // F7.1 applies to this chart's slices.
 export function ThreatSeverityChart() {
-  const scores = useEntityScores(SCORE_SAMPLE_PAGE)
+  const range = useTimeRangeStore((state) => state.range)
+  const scores = useEntityScores(SCORE_SAMPLE_PAGE, range)
   const distribution = scores.isSuccess ? buildSeverityDistribution(scores.rows) : null
   const hasData = distribution?.some((slice) => slice.count > 0) ?? false
   const error = scores.error

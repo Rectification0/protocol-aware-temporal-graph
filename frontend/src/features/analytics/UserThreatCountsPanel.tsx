@@ -5,21 +5,25 @@ import { tileUnavailableMessage } from '@/features/dashboard/logic'
 import { StatusPill } from '@/features/dashboard/status-pill'
 import { countUserThreatTiers, THREAT_TIER_LABEL } from '@/features/analytics/logic'
 import { useEntityScores } from '@/hooks/api'
+import { useTimeRangeStore } from '@/store/timeRangeStore'
 
 const TIER_TONE = { malicious: 'error', suspicious: 'warning', benign: 'success' } as const
 
 // F0.3's scores endpoint caps `limit` at 500 (scores.py) -- this is a
-// sample of the top-500 entities by |score|, not literally every user in
-// the deployment. A true population count needs a dedicated aggregate
-// endpoint, the same F0.12 gap tasks.md's F7.1 line already flags.
+// sample of the top-500 (by |score|) entities *within F8.1's selected
+// range*, not literally every user in the deployment. A true population
+// count needs a dedicated aggregate endpoint, the same F0.12 gap
+// tasks.md's F7.1 line already flags.
 const SCORE_SAMPLE_PAGE: PaginationState = { pageIndex: 0, pageSize: 500 }
 
 // F7.1: malicious/suspicious/benign user counts, from `logic.ts`'s
 // provisional score-threshold buckets. Per tasks.md's own instruction,
 // the caption below is load-bearing UI copy, not decoration -- these
-// numbers must never read as an authoritative classification.
+// numbers must never read as an authoritative classification. Scoped to
+// F8.1's shared time-range filter, same as every other tile on this page.
 export function UserThreatCountsPanel() {
-  const scores = useEntityScores(SCORE_SAMPLE_PAGE)
+  const range = useTimeRangeStore((state) => state.range)
+  const scores = useEntityScores(SCORE_SAMPLE_PAGE, range)
   const counts = scores.isSuccess ? countUserThreatTiers(scores.rows) : null
 
   return (

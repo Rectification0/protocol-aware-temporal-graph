@@ -114,6 +114,21 @@ def test_entity_scores_sorted_by_abs_score_descending():
 
 
 @requires_postgres
+def test_entity_scores_start_end_filters_on_t_and_count_matches():
+    writer = ApiStateWriter(get_connection)
+    reader = ApiStateReader(get_connection)
+    writer.record_entity_score(InferenceResult(entity_id="User:old", score=1.0, t=100.0, trigger="scheduled"))
+    writer.record_entity_score(InferenceResult(entity_id="User:mid", score=2.0, t=200.0, trigger="scheduled"))
+    writer.record_entity_score(InferenceResult(entity_id="User:new", score=3.0, t=300.0, trigger="scheduled"))
+
+    scores = reader.list_entity_scores(limit=10, start=150.0, end=250.0)
+
+    assert [s.entity_id for s in scores] == ["User:mid"]
+    assert reader.count_entity_scores(start=150.0, end=250.0) == 1
+    assert reader.count_entity_scores() == 3
+
+
+@requires_postgres
 def test_motif_completion_round_trip():
     writer = ApiStateWriter(get_connection)
     reader = ApiStateReader(get_connection)
@@ -142,6 +157,22 @@ def test_motif_completion_filters_by_motif_name():
 
     assert len(records) == 1
     assert records[0].motif_name == "admin_share_escalation"
+
+
+@requires_postgres
+def test_motif_completions_start_end_filters_on_completed_at_and_count_matches():
+    writer = ApiStateWriter(get_connection)
+    reader = ApiStateReader(get_connection)
+    writer.record_motif_completion(MotifCompletionEvent("lateral_pivot", "Machine:C1", ["e1"], 100.0))
+    writer.record_motif_completion(MotifCompletionEvent("lateral_pivot", "Machine:C2", ["e2"], 200.0))
+    writer.record_motif_completion(MotifCompletionEvent("lateral_pivot", "Machine:C3", ["e3"], 300.0))
+
+    records = reader.list_motif_completions(limit=10, start=150.0, end=250.0)
+
+    assert [r.chain_key for r in records] == ["Machine:C2"]
+    assert reader.count_motif_completions(start=150.0, end=250.0) == 1
+    assert reader.count_motif_completions() == 3
+    assert reader.count_motif_completions(motif_name="admin_share_escalation") == 0
 
 
 @requires_postgres

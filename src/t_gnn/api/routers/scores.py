@@ -6,9 +6,18 @@ Backing: `src/t_gnn/score_entities.py`/`src/t_gnn/tgnn.py`'s
 shape already dumped to `scores.json` by the CLI. Rows are populated by
 `ApiStateWriter.record_entity_score()`, subscribed to the pipeline
 process's `InferenceResultBus`.
+
+`start`/`end` (tasks.md F8.1, added for Milestone F8) are optional unix-
+second bounds on `t`. `total` in the response envelope stays `null` for
+an unfiltered request (no `COUNT(*)` behind the default "recent page"
+case, per F4.5's existing convention) but is computed exactly whenever
+either bound is supplied, since F8.5's "average anomalies per hour" needs
+a real count, not a `limit`-bounded page.
 """
 
 from __future__ import annotations
+
+from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 
@@ -23,8 +32,11 @@ router = APIRouter(prefix="/api/scores", tags=["scores"])
 def list_entity_scores(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    start: Optional[float] = Query(default=None, description="Unix-seconds lower bound on `t`, inclusive"),
+    end: Optional[float] = Query(default=None, description="Unix-seconds upper bound on `t`, inclusive"),
     reader: ApiStateReader = Depends(get_reader),
 ) -> Paginated[EntityScoreOut]:
-    results = require_postgres(lambda: reader.list_entity_scores(limit=limit, offset=offset))
+    results = require_postgres(lambda: reader.list_entity_scores(limit=limit, offset=offset, start=start, end=end))
     items = [EntityScoreOut(**r.__dict__) for r in results]
-    return Paginated[EntityScoreOut](items=items, limit=limit, offset=offset)
+    total = require_postgres(lambda: reader.count_entity_scores(start=start, end=end)) if (start is not None or end is not None) else None
+    return Paginated[EntityScoreOut](items=items, limit=limit, offset=offset, total=total)

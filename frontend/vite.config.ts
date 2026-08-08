@@ -23,6 +23,13 @@ export default defineConfig({
     // failing an otherwise-correct `findBy*`/`waitFor` a few ms before
     // its own timeout fired. Raised well above `asyncUtilTimeout` so the
     // inner wait always loses the race first.
-    testTimeout: 10_000,
+    // Milestone F8 needed `src/test/setup.ts`'s `asyncUtilTimeout` (a
+    // *different* knob -- `findBy*`/`waitFor`'s own internal polling
+    // budget, not this outer per-test safety net) raised to 20000ms --
+    // see that file's comment for why. Kept comfortably above it here so
+    // the inner wait always loses the race and reports the real failure,
+    // rather than this outer timeout firing first with a less specific
+    // "Test timed out" message.
+    testTimeout: 25_000,
   },
 })

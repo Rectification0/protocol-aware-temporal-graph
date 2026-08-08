@@ -129,6 +129,13 @@ python -m t_gnn.pilot `
 `pilot-report.json` will show precision/recall for both the
 anomaly-deviation path and the motif-completion path.
 
+`frontend_implementation` branch only: if `pilot-report.json` ends up at
+the repo root (the default path above), `python -m t_gnn.api`'s
+`GET /api/pilot/latest-report` serves it directly to the frontend's
+Threat Analytics page (tasks.md F8.4) — set `PILOT_REPORT_PATH` if you
+wrote it somewhere else. This is still a one-shot batch read of whatever
+file existed at request time, not a live re-run of `pilot.py`.
+
 ### Task: generate simulated traffic and inspect the live T-GNN's per-entity scores
 
 ```bash

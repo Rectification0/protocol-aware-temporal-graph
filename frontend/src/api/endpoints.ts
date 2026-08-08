@@ -12,6 +12,7 @@ import type {
   MotifFeedbackOut,
   MotifResetOut,
   Paginated,
+  PilotReportOut,
   ProtocolConfigOut,
   PrunedEdgeOut,
 } from '@/types/api'
@@ -26,13 +27,27 @@ export interface PageParams {
   signal?: AbortSignal
 }
 
+// F8.1: unix-seconds bounds accepted by `/api/scores/entities` and
+// `/api/motifs/completions` -- optional on both endpoint functions below,
+// so every existing caller (F6/F7's unfiltered tiles) is unaffected.
+export interface TimeRangeParams {
+  start?: number
+  end?: number
+}
+
 export function getMetricsSnapshot(signal?: AbortSignal) {
   return apiRequest<import('@/types/api').MetricsSnapshotOut>('/api/metrics/snapshot', { signal })
 }
 
-export function listEntityScores({ limit, offset, signal }: PageParams = {}) {
+export function listEntityScores({
+  limit,
+  offset,
+  start,
+  end,
+  signal,
+}: PageParams & TimeRangeParams = {}) {
   return apiRequest<Paginated<EntityScoreOut>>('/api/scores/entities', {
-    query: { limit, offset },
+    query: { limit, offset, start, end },
     signal,
   })
 }
@@ -41,12 +56,18 @@ export function listMotifCompletions({
   limit,
   offset,
   motifName,
+  start,
+  end,
   signal,
-}: PageParams & { motifName?: string } = {}) {
+}: PageParams & TimeRangeParams & { motifName?: string } = {}) {
   return apiRequest<Paginated<MotifCompletionOut>>('/api/motifs/completions', {
-    query: { limit, offset, motif_name: motifName },
+    query: { limit, offset, motif_name: motifName, start, end },
     signal,
   })
+}
+
+export function getPilotReport(signal?: AbortSignal) {
+  return apiRequest<PilotReportOut>('/api/pilot/latest-report', { signal })
 }
 
 export function listMotifResets({ limit, offset, signal }: PageParams = {}) {

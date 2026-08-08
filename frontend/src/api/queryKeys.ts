@@ -5,10 +5,15 @@
 
 export const queryKeys = {
   metricsSnapshot: () => ['metrics', 'snapshot'] as const,
-  entityScores: (params: { limit: number; offset: number }) =>
+  entityScores: (params: { limit: number; offset: number; start?: number; end?: number }) =>
     ['scores', 'entities', params] as const,
-  motifCompletions: (params: { limit: number; offset: number; motifName?: string }) =>
-    ['motifs', 'completions', params] as const,
+  motifCompletions: (params: {
+    limit: number
+    offset: number
+    motifName?: string
+    start?: number
+    end?: number
+  }) => ['motifs', 'completions', params] as const,
   motifResets: (params: { limit: number; offset: number }) => ['motifs', 'resets', params] as const,
   motifFeedback: (params: { limit: number; offset: number }) =>
     ['motifs', 'feedback', params] as const,
@@ -20,4 +25,6 @@ export const queryKeys = {
   auditLog: (params: { limit: number; offset: number; since?: number; type?: string }) =>
     ['audit', 'log', params] as const,
   health: () => ['health'] as const,
+  // F8.4: no params -- there is exactly one "latest" report file.
+  pilotReport: () => ['pilot', 'latest-report'] as const,
 }

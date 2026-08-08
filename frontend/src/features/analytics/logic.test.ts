@@ -4,12 +4,12 @@ import {
   buildThreatTrendSeries,
   classifyEntityScore,
   computeLiveAttackCount,
+  computeRatePerHour,
   countUserThreatTiers,
   isUserEntity,
   LIVE_ATTACK_WINDOW_SECONDS,
   THREAT_TIER_SCORE_THRESHOLDS,
   THREAT_TREND_BUCKET_COUNT,
-  THREAT_TREND_BUCKET_SECONDS,
 } from '@/features/analytics/logic'
 import type { LiveStreamEvent } from '@/store/liveStreamStore'
 import type { EntityScoreOut, MotifCompletionOut } from '@/types/api'
@@ -102,29 +102,41 @@ describe('buildSeverityDistribution', () => {
 })
 
 describe('buildThreatTrendSeries', () => {
-  const now = THREAT_TREND_BUCKET_SECONDS * THREAT_TREND_BUCKET_COUNT * 10
+  const bucketSeconds = 3600
+  const start = bucketSeconds * THREAT_TREND_BUCKET_COUNT * 10
+  const end = start + bucketSeconds * THREAT_TREND_BUCKET_COUNT
 
-  it('produces exactly bucketCount buckets covering the trailing window', () => {
-    const series = buildThreatTrendSeries([], [], now)
+  it('produces exactly bucketCount buckets spanning [start, end]', () => {
+    const series = buildThreatTrendSeries([], [], start, end)
     expect(series).toHaveLength(THREAT_TREND_BUCKET_COUNT)
-    expect(series[0].bucketStart).toBe(
-      now - THREAT_TREND_BUCKET_SECONDS * THREAT_TREND_BUCKET_COUNT,
-    )
+    expect(series[0].bucketStart).toBe(start)
     expect(series.every((point) => point.attacks === 0 && point.highRiskEntities === 0)).toBe(true)
   })
 
   it('buckets motif completions by completed_at', () => {
-    const series = buildThreatTrendSeries([completion(now - 1), completion(now - 1)], [], now)
+    const series = buildThreatTrendSeries(
+      [completion(end - 1), completion(end - 1)],
+      [],
+      start,
+      end,
+    )
     expect(series[series.length - 1].attacks).toBe(2)
   })
 
-  it('ignores completions and scores outside the visible window', () => {
-    const tooOld = now - THREAT_TREND_BUCKET_SECONDS * THREAT_TREND_BUCKET_COUNT - 10
+  it('is inclusive of a completion exactly at the end boundary', () => {
+    const series = buildThreatTrendSeries([completion(end)], [], start, end)
+    expect(series[series.length - 1].attacks).toBe(1)
+  })
+
+  it('ignores completions and scores outside [start, end]', () => {
+    const tooOld = start - 10
+    const tooNew = end + 10
     const malicious = THREAT_TIER_SCORE_THRESHOLDS.critical + 1
     const series = buildThreatTrendSeries(
-      [completion(tooOld)],
-      [score('User:alice', malicious, tooOld)],
-      now,
+      [completion(tooOld), completion(tooNew)],
+      [score('User:alice', malicious, tooOld), score('User:bob', malicious, tooNew)],
+      start,
+      end,
     )
     expect(series.every((point) => point.attacks === 0 && point.highRiskEntities === 0)).toBe(true)
   })
@@ -133,10 +145,31 @@ describe('buildThreatTrendSeries', () => {
     const malicious = THREAT_TIER_SCORE_THRESHOLDS.critical + 1
     const series = buildThreatTrendSeries(
       [],
-      [score('User:alice', malicious, now - 1), score('User:bob', 0, now - 1)],
-      now,
+      [score('User:alice', malicious, end - 1), score('User:bob', 0, end - 1)],
+      start,
+      end,
     )
     expect(series[series.length - 1].highRiskEntities).toBe(1)
+  })
+
+  it('spreads a wider range across the same fixed bucket count', () => {
+    const wideEnd = start + bucketSeconds * THREAT_TREND_BUCKET_COUNT * 7 // a week, not a day
+    const series = buildThreatTrendSeries([], [], start, wideEnd)
+    expect(series).toHaveLength(THREAT_TREND_BUCKET_COUNT)
+    expect(series[1].bucketStart - series[0].bucketStart).toBeCloseTo(
+      (wideEnd - start) / THREAT_TREND_BUCKET_COUNT,
+    )
+  })
+})
+
+describe('computeRatePerHour', () => {
+  it('divides the count by the range duration in hours', () => {
+    expect(computeRatePerHour(10, 0, 2 * 3600)).toBe(5)
+  })
+
+  it('returns null for a zero-or-negative-duration range', () => {
+    expect(computeRatePerHour(10, 100, 100)).toBeNull()
+    expect(computeRatePerHour(10, 200, 100)).toBeNull()
   })
 })
 

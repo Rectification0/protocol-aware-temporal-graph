@@ -53,12 +53,28 @@ class FakeApiState:
     def latest_metrics_snapshot(self):
         return self.snapshot
 
-    def list_entity_scores(self, limit=50, offset=0):
-        return self.scores[offset:offset + limit]
+    def _scores_in_range(self, start=None, end=None):
+        return [s for s in self.scores if (start is None or s.t >= start) and (end is None or s.t <= end)]
 
-    def list_motif_completions(self, limit=50, offset=0, motif_name=None):
-        items = [c for c in self.completions if motif_name is None or c.motif_name == motif_name]
-        return items[offset:offset + limit]
+    def list_entity_scores(self, limit=50, offset=0, start=None, end=None):
+        return self._scores_in_range(start, end)[offset:offset + limit]
+
+    def count_entity_scores(self, start=None, end=None):
+        return len(self._scores_in_range(start, end))
+
+    def _completions_matching(self, motif_name=None, start=None, end=None):
+        return [
+            c for c in self.completions
+            if (motif_name is None or c.motif_name == motif_name)
+            and (start is None or c.completed_at >= start)
+            and (end is None or c.completed_at <= end)
+        ]
+
+    def list_motif_completions(self, limit=50, offset=0, motif_name=None, start=None, end=None):
+        return self._completions_matching(motif_name, start, end)[offset:offset + limit]
+
+    def count_motif_completions(self, motif_name=None, start=None, end=None):
+        return len(self._completions_matching(motif_name, start, end))
 
     def list_motif_resets(self, limit=50, offset=0):
         return self.resets[offset:offset + limit]
@@ -121,6 +137,9 @@ def fake_forensics():
 def client(fake_state, fake_forensics, tmp_path):
     audit_path = tmp_path / "audit.log"
     app.dependency_overrides[deps.audit_log_path] = lambda: audit_path
+    # No file at this path until a test writes one -- matches the real
+    # "pilot.py has never been run against this deployment" default.
+    app.dependency_overrides[deps.pilot_report_path] = lambda: tmp_path / "pilot-report.json"
     app.dependency_overrides[deps.get_stream_config] = lambda: StreamConfig(poll_interval_seconds=0.0, max_iterations=1)
     app.dependency_overrides[deps.get_reader] = lambda: fake_state
     app.dependency_overrides[deps.get_writer] = lambda: fake_state
@@ -169,6 +188,20 @@ def test_entity_scores_paginated_envelope(client, fake_state):
     assert body["offset"] == 0
     assert len(body["items"]) == 2
     assert body["items"][0]["entity_id"] == "User:u0"
+    assert body["total"] is None  # F8.1: no start/end -- no COUNT(*) behind the default page
+
+
+def test_entity_scores_start_end_filters_and_returns_exact_total(client, fake_state):
+    fake_state.scores = [
+        InferenceResult(entity_id="User:old", score=1.0, t=100.0, trigger="scheduled"),
+        InferenceResult(entity_id="User:mid", score=2.0, t=200.0, trigger="scheduled"),
+        InferenceResult(entity_id="User:new", score=3.0, t=300.0, trigger="scheduled"),
+    ]
+    response = client.get("/api/scores/entities?start=150&end=250")
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["entity_id"] for item in body["items"]] == ["User:mid"]
+    assert body["total"] == 1  # F8.1: total is exact once a range is applied
 
 
 def test_motif_completions_filter_by_name(client, fake_state):
@@ -181,6 +214,20 @@ def test_motif_completions_filter_by_name(client, fake_state):
     items = response.json()["items"]
     assert len(items) == 1
     assert items[0]["motif_name"] == "admin_share_escalation"
+    assert response.json()["total"] is None  # F8.1: no start/end -- unfiltered stays uncounted
+
+
+def test_motif_completions_start_end_filters_and_returns_exact_total(client, fake_state):
+    fake_state.completions = [
+        MotifCompletionRecord(id=1, motif_name="lateral_pivot", chain_key="Machine:C1", matched_edges=["e1"], completed_at=100.0, confidence=1.0),
+        MotifCompletionRecord(id=2, motif_name="lateral_pivot", chain_key="Machine:C2", matched_edges=["e2"], completed_at=200.0, confidence=1.0),
+        MotifCompletionRecord(id=3, motif_name="lateral_pivot", chain_key="Machine:C3", matched_edges=["e3"], completed_at=300.0, confidence=1.0),
+    ]
+    response = client.get("/api/motifs/completions?start=150&end=250")
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["chain_key"] for item in body["items"]] == ["Machine:C2"]
+    assert body["total"] == 1  # F8.3's "number of attacks" needs this exact, not a page-bounded count
 
 
 def test_motif_resets_listing(client, fake_state):
@@ -334,6 +381,34 @@ def test_audit_log_paginates(client):
     assert body["total"] == 5
     assert len(body["items"]) == 2
     assert body["items"][0]["edge_id"] == "e4"
+
+
+# --- F8.4: GET /api/pilot/latest-report --------------------------------------------
+
+
+def test_pilot_report_404_when_none_recorded(client):
+    response = client.get("/api/pilot/latest-report")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == 404
+
+
+def test_pilot_report_returns_recorded_values(client, tmp_path):
+    report_path = tmp_path / "pilot-report.json"
+    report_path.write_text(
+        json.dumps({
+            "anomaly": {"true_positives": 3, "false_positives": 1, "false_negatives": 0, "precision": 0.75, "recall": 1.0},
+            "motif": {"true_positives": 2, "false_positives": 0, "false_negatives": 1, "precision": 1.0, "recall": 0.6667},
+        }),
+        encoding="utf-8",
+    )
+
+    response = client.get("/api/pilot/latest-report")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["anomaly"]["precision"] == 0.75
+    assert body["motif"]["recall"] == 0.6667
+    assert isinstance(body["evaluated_at"], float)
 
 
 # --- F0.10: GET /api/stream/events -------------------------------------------------

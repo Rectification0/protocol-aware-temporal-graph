@@ -83,7 +83,12 @@ needs — this repo previously exposed its functionality only as a Python
 library plus CLIs, with no HTTP surface at all) is implemented: F0.1-F0.10,
 F0.15 are real, tested code (F0.8's audit-log endpoint and F0.10's SSE
 live-stream channel — the two tasks not marked `[BACKEND TODO]` — were
-added in a later pass; see the Architecture section addendum below).
+added in a later pass; see the Architecture section addendum below). A new
+`GET /api/pilot/latest-report` endpoint and optional `start`/`end`
+query-param support on `/api/scores/entities`/`/api/motifs/completions`
+were added in a still-later pass while building Milestone F8's F8.1/F8.4
+— see that milestone's own status paragraph below and its Architecture
+addendum for detail; not re-described here.
 F0.11 (real login) is deliberately deferred in favor of the frontend's
 mock-auth bypass (tasks.md F3.4) — that one, unlike F0.8/F0.10, *is*
 marked `[BACKEND TODO]` in tasks.md, since it needs a real product
@@ -234,6 +239,45 @@ visible more often -- fixed by raising `vite.config.ts`'s `testTimeout`
 comfortably above it, the same "found and fixed an unrelated flake while
 landing this milestone" situation F6.7 documented above. See the
 Architecture section addendum below for file-by-file detail.
+
+Milestone F8 (Time-Based Analytics) is fully implemented: F8.1-F8.5 are
+all real, verified code, still on `AnalyticsPage.tsx` (F7's page --
+Time-Based Analytics doesn't get its own route). F8.1 (the shared
+time-range filter) required a genuine backend change, not just frontend
+plumbing: `/api/scores/entities` and `/api/motifs/completions` gained
+optional `start`/`end` query params (`src/t_gnn/api_state.py`'s
+`list_entity_scores`/`list_motif_completions` plus new
+`count_entity_scores`/`count_motif_completions` companions), with the
+response envelope's `total` computed via an exact `COUNT(*)` whenever
+either bound is supplied -- still `null` for an unfiltered request, so
+F6/F7's original unfiltered call sites are unaffected. `frontend/src/store/
+timeRangeStore.ts` (Zustand, like `authStore`/`liveStreamStore`) holds the
+selected range; F7.1-F7.3's tiles were updated to read it (F7.2's trend
+chart in particular was generalized from a fixed 24-hourly-bucket window
+to a fixed *bucket count* spread evenly across whatever range is
+selected -- tasks.md's own F8.1 line names F7's hooks as in-scope, not
+just F9/F11's not-yet-built ones). F8.4's "detection rate" needed a
+second real backend addition: tasks.md's own line allowed either reusing
+F0.9 or adding a new endpoint, and a new one was the right call since
+F0.9's registries have nothing to do with pilot evaluation results --
+`GET /api/pilot/latest-report` reads whatever file `pilot.py --output`
+was pointed at and returns it plus the file's mtime as `evaluated_at`, so
+the frontend can honestly label the metric "as of last pilot evaluation,"
+not live, per that task's explicit instruction. Landing F8.1 surfaced one
+more instance of this branch's recurring test-infra flake (F6.7 and F7
+each already fixed one root cause of the same symptom): `router.test.tsx`'s
+unauthenticated `/analytics` case still has to resolve that route's
+`lazy` module during navigation matching even though `ProtectedRoute`
+redirects before rendering it, and `AnalyticsPage`'s dependency graph
+(Recharts + `react-day-picker` + nine feature components) grew heavy
+enough that the *previous* fix's 10000ms `testTimeout` bump stopped being
+enough. This time the actual bottleneck was correctly identified as
+`setup.ts`'s `asyncUtilTimeout` itself (a different knob than
+`testTimeout` -- the outer per-test safety net was never the binding
+constraint, which is why raising it alone didn't help): raised from
+5000ms to 20000ms, with `testTimeout` raised again to 25000ms just to
+stay comfortably above it. See the Architecture section addendum below
+for file-by-file detail.
 
 ## End-of-phase / end-of-milestone checklist
 
@@ -506,3 +550,14 @@ by the rest of the suite:
 - `src/pages/AnalyticsPage.tsx` assembles all four under a "Threat Analytics" heading: a two-column row for F7.1/F7.4's `StatCard`s, then a three-column row (F7.2's chart spanning two, F7.3's chart taking the third). Milestones F8 (time-range filtering) and F12 (this page's remaining charts) build further onto this same page/layout.
 - Landing F7.4 surfaced two test-infra gaps once a real page/route could mount the SSE client outside of `liveStream.test.ts`'s own hand-injected fake `EventSourceFactory`: jsdom has no `EventSource` global at all, throwing a `ReferenceError` the moment `useLiveStream`'s connect effect ran in any test that didn't explicitly mock `@/api/liveStream` (e.g. `router.test.tsx`'s `/analytics` cases) -- fixed with a no-op `EventSource` stub installed globally in `frontend/src/test/setup.ts` (never opens or emits; tests needing real open/message/error behavior still inject their own fake via `useLiveStream`'s `eventSourceFactory` option, unchanged). Separately, Vitest's own default per-test timeout (5000ms) exactly matched `setup.ts`'s `asyncUtilTimeout` (also 5000ms) -- a latent race between the two that six new test files' added transform/import load made visible as an intermittent full-suite-only failure in `router.test.tsx`'s unrelated login-redirect case; fixed by raising `vite.config.ts`'s `testTimeout` to 10000ms, comfortably clear of the inner wait. Same "found and fixed an unrelated flake while landing this milestone" situation F6.7 documented above, just a different root cause. `router.test.tsx`'s `/analytics` case was also updated for the page's new real heading text ("Threat Analytics", not the old placeholder's "Analytics").
 - Tests: `logic.test.ts` (every tier boundary, bucket-window edge, and event-window edge above), `UserThreatCountsPanel.test.tsx`, `ThreatSeverityChart.test.tsx`, `ThreatTrendsChart.test.tsx` (chart-rendering assertions wait on `ChartContainer`'s own `data-chart` wrapper via `waitFor`, not on Recharts-internal content like legend text -- `ResponsiveContainer` never resolves a nonzero size under jsdom, which has no `ResizeObserver`), `LiveAttackCounter.test.tsx` (mocks `@/api/liveStream`'s `useLiveStream` directly, the same API-boundary-mocking convention `SystemHealthTile.test.tsx` already uses for `getHealth`), and `AnalyticsPage.test.tsx` (a smoke test asserting all four panels render together). Verified concretely: `npx tsc -b --noEmit`, `npm run lint`, `npm run format:check`, `npm run build`, and `npm run test` (137 tests across 32 files, up from 113/26 pre-F7, stable across repeated full-suite runs) all pass clean. The dev server (`npm run dev`) was started and `/src/pages/AnalyticsPage.tsx` plus its new dependencies were confirmed to transform without error; a full visual check of the page's live-backend rendering was not done this pass (no browser-automation tool was available in this session), same caveat F6's addendum already notes.
+
+**Frontend Implementation: Milestone F8 — Time-Based Analytics.** Backend-first, unlike F6/F7: F8.1 and F8.4 both needed a real change to `src/t_gnn/api/` before any frontend work could be honest rather than fabricated.
+
+- `src/t_gnn/api_state.py`: a new module-level `_time_range_conditions()`/`_time_range_clause()` pair builds the shared `start`/`end` `WHERE` fragment (unix seconds, inclusive) so `list_entity_scores`/`list_motif_completions` and their new `count_entity_scores`/`count_motif_completions` companions don't each hand-roll it. `count_*` exists because `list_*`'s `limit`-bounded page can't answer "how many total" -- F8.3's exact attack count and F8.5's exact entity-score volume both need it. `src/t_gnn/api/routers/scores.py`/`motifs.py`'s `completions` endpoint both gained `start: float | None`/`end: float | None` query params, computing `Paginated.total` via the new `count_*` method only when either is supplied -- an unfiltered request (F6/F7's original call sites) still gets `total: null`, per F4.5's existing convention, so this is additive, not a breaking change to those.
+- `src/t_gnn/api/routers/pilot.py`'s `GET /api/pilot/latest-report` (F8.4) reads `pilot.py --output`'s JSON dump directly (via `deps.py`'s new `pilot_report_path()`, env var `PILOT_REPORT_PATH`, default `pilot-report.json`) rather than importing `pilot.py`'s own classes -- this keeps the always-on API process decoupled from the batch tool's heavier import graph, consistent with F0's "decoupled, stateless reader" architecture decision. 404s cleanly (mirroring `metrics.py`'s "no snapshot recorded" convention) if no report file exists yet, which is the honest default state for this repo (no real pilot evaluation has been run against real labeled traffic, per task 0.4/7.3's existing operational-gap notes). `evaluated_at` is the file's own `stat().st_mtime`, not a field pilot.py's dataclass carries.
+- `frontend/src/store/timeRangeStore.ts` (F8.1) is the shared selected-range state -- `{start, end}` in unix seconds, defaulting to the last 24h. `frontend/src/components/time-range-filter.tsx` is a thin `Date`-object adapter onto F5.8's `DateRangePicker`, which already implemented every preset tasks.md's F8.1 line asks for (last hour/24h/7d/30d/custom) -- no changes needed to that component at all. `useEntityScores`/`useMotifCompletions` (F4.2) both gained an optional trailing `range` parameter threading `start`/`end` into the query key and the request; every existing F6/F7 call site that omits it is unaffected (both params come through as `undefined`, dropped by `client.ts`'s `buildUrl()`).
+- F7's tiles were updated to actually consume the shared range, closing the loop tasks.md's F8.1 line describes ("applied ... across F7/F9/F11's data hooks" -- F9/F11 don't exist yet, so today this only reaches F7): `UserThreatCountsPanel.tsx`/`ThreatSeverityChart.tsx` just pass `range` through to their existing `useEntityScores` call. `ThreatTrendsChart.tsx` needed a real logic change -- `features/analytics/logic.ts`'s `buildThreatTrendSeries()` was refactored from a fixed "last 24h in hourly buckets" signature to `(completions, scores, start, end, bucketCount = 24)`, deriving `bucketSeconds` as `(end - start) / bucketCount` so a wider selection (e.g. 30 days) still renders a fixed 24 bars instead of trying to draw 720 hourly ones. Bucket labels switch from `HH:mm` to `MMM d` once the selected range exceeds 2 days, since hourly-looking labels stop being meaningful once each bucket spans most of a day. `LiveAttackCounter.tsx` (F7.4) is deliberately untouched -- a rolling "now" window has no "selected range" to apply.
+- Five new range-scoped tiles/components in `features/analytics/`, all colocated with F7's rather than a separate folder (still the same `AnalyticsPage.tsx`): `HackersDetectedTile.tsx` (F8.2, `countUserThreatTiers(...).malicious` over the range-filtered sample), `AttacksInRangeTile.tsx` (F8.3, the backend's exact `total` via a `pageSize: 1` request -- the same "just want the envelope's metadata" trick `SecurityLevelTile.tsx` already uses), `ThreatRateTile.tsx`/`AvgAnomaliesPerHourTile.tsx` (F8.4/F8.5, both call `logic.ts`'s new `computeRatePerHour(count, start, end)`, one new shared function rather than two near-duplicate ones), and `DetectionRateTile.tsx` (F8.4, a new `usePilotReport()` hook hitting the new endpoint -- deliberately not wired to the time-range store at all, per tasks.md's own "not live"/"last pilot evaluation" instruction: a pilot report is a whole-dataset batch result, not a per-range-recomputable one).
+- `src/pages/AnalyticsPage.tsx` gained `TimeRangeFilter` at the top (next to the page heading) and a new five-column tile row below F7's existing content for F8.2-F8.5.
+- Landing F8.1 hit the same class of flake F6.7 and F7 each already fixed a different root cause of: `router.test.tsx`'s unauthenticated `/analytics` case still has to resolve `AnalyticsPage`'s `lazy` module during route matching before `ProtectedRoute` can redirect it, and that module's dependency graph (Recharts + `react-day-picker` + nine feature components, several of which other test files now also transform concurrently) grew heavy enough that F7's 10000ms `testTimeout` bump stopped being sufficient under a full-suite run. Raising `testTimeout` alone (tried first, up to 45000ms) did not help, which is what correctly identified the real bottleneck: `src/test/setup.ts`'s `asyncUtilTimeout` (`@testing-library/react`'s own internal `findBy*`/`waitFor` polling budget) -- a *different* knob than `testTimeout` (the outer per-test safety net) -- was still 5000ms and is what actually governs how long `findByRole` etc. will keep polling. Raised to 20000ms, with `testTimeout` set to 25000ms (comfortably above it, preserving the "outer timeout never fires first" invariant F7's fix established).
+- Tests: `logic.test.ts`'s `buildThreatTrendSeries` suite rewritten for the new `(start, end)` signature (bucket-count invariance across a 1-day vs. 1-week range, inclusive-`end`-boundary handling) plus a new `computeRatePerHour` suite; `timeRangeStore.test.ts`; `time-range-filter.test.tsx`; one test per new tile (`HackersDetectedTile`/`AttacksInRangeTile`/`ThreatRateTile`/`AvgAnomaliesPerHourTile`/`DetectionRateTile`); `UserThreatCountsPanel.test.tsx`/`ThreatSeverityChart.test.tsx`/`ThreatTrendsChart.test.tsx` each gained a case asserting the range is actually threaded through to the mocked endpoint call, not just that data renders; `AnalyticsPage.test.tsx` updated for the new heading/filter/tiles. Backend: `tests/test_api.py` gained `start`/`end`-filtering + exact-`total` cases for both endpoints plus `GET /api/pilot/latest-report` 404/200 cases (via `FakeApiState`'s new `count_*` methods and a `tmp_path`-overridden `pilot_report_path()`); `tests/test_api_state.py` gained live-Postgres round-trips for both new `count_*` methods. Verified concretely: the full backend `pytest` suite (284 passed, 2 skipped -- Neo4j/Redis-dependent tests, live Postgres was reachable and exercised), and on the frontend, `npx tsc -b --noEmit`, `npm run lint`, `npm run format:check`, `npm run build`, and `npm run test` (158 tests across 39 files, up from 137/32 pre-F8, stable across three repeated full-suite runs) all pass clean. The dev server (`npm run dev`) was started and `AnalyticsPage.tsx`/`time-range-filter.tsx`/`timeRangeStore.ts` were confirmed to transform without error; a full visual check of the page's live-backend rendering was not done this pass (no browser-automation tool was available in this session), same caveat F6/F7's addenda already note.

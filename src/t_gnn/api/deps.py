@@ -41,6 +41,16 @@ def audit_log_path() -> Path:
     return Path(os.environ.get("AUDIT_LOG_PATH", "logs/audit.log"))
 
 
+def pilot_report_path() -> Path:
+    """tasks.md F8.4: `pilot.py`'s own CLI writes wherever `--output`
+    points; `docs/cli-reference.md`/`docs/operational-runbook.md`'s
+    examples (and this repo's `.gitignore`) already standardize on
+    `pilot-report.json` at the repo root, so that's the default here too
+    -- same "both processes agree on a path without sharing code"
+    convention as `audit_log_path()` above."""
+    return Path(os.environ.get("PILOT_REPORT_PATH", "pilot-report.json"))
+
+
 class StreamConfig:
     """F0.10's polling cadence/iteration-cap knobs. `max_iterations` is
     `None` (run until the client disconnects) in real use; tests override

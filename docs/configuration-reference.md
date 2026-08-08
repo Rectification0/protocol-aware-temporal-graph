@@ -203,6 +203,7 @@ testing" for the intended workflow (feed the output straight into
 | `NEO4J_URI`/`NEO4J_USER`/`NEO4J_PASSWORD` | Documented reference values matching `docker-compose.yml`; not auto-read by `Neo4jConfig` (construct it explicitly) |
 | `AUDIT_LOG_PATH` | `frontend_implementation` branch only — `src/t_gnn/api/deps.py`'s `audit_log_path()` (tasks.md F0.8), default `logs/audit.log`, must match whatever `scripts/run_pipeline.py --audit-log` path the pipeline process is writing to |
 | `STREAM_POLL_INTERVAL_SECONDS` | `frontend_implementation` branch only — `src/t_gnn/api/deps.py`'s `get_stream_config()` (tasks.md F0.10's SSE endpoint), default `1.0` |
+| `PILOT_REPORT_PATH` | `frontend_implementation` branch only — `src/t_gnn/api/deps.py`'s `pilot_report_path()` (tasks.md F8.4's `GET /api/pilot/latest-report`), default `pilot-report.json`, must match whatever path `pilot.py --output` was pointed at |
 
 Copy `.env.example` to `.env` and edit it for your local credentials —
 `.env` is gitignored and auto-loaded by `t_gnn/db.py`.

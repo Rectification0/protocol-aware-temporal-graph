@@ -151,6 +151,29 @@ class HealthOut(BaseModel):
     last_metrics_snapshot_age_seconds: Optional[float]
 
 
+class DetectionMetricsOut(BaseModel):
+    """Mirrors `pilot.py`'s `DetectionMetrics` field-for-field."""
+
+    true_positives: int
+    false_positives: int
+    false_negatives: int
+    precision: Optional[float]
+    recall: Optional[float]
+
+
+class PilotReportOut(BaseModel):
+    """Mirrors `pilot.py`'s `PilotReport` (`{"anomaly": ..., "motif": ...}`,
+    the exact shape its CLI's `--output` JSON dump writes) plus
+    `evaluated_at` -- the report file's own mtime, since neither
+    `PilotReport` nor its JSON dump carries a timestamp of its own
+    (tasks.md F8.4: this must be labeled "as of last pilot evaluation,"
+    not live, and a caller needs *some* timestamp to render that label)."""
+
+    anomaly: DetectionMetricsOut
+    motif: DetectionMetricsOut
+    evaluated_at: float
+
+
 class AlertAckIn(BaseModel):
     detection_type: str
     detection_ref: str

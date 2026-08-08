@@ -39,11 +39,22 @@ def list_motif_completions(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     motif_name: str | None = None,
+    start: float | None = Query(default=None, description="Unix-seconds lower bound on `completed_at`, inclusive"),
+    end: float | None = Query(default=None, description="Unix-seconds upper bound on `completed_at`, inclusive"),
     reader: ApiStateReader = Depends(get_reader),
 ) -> Paginated[MotifCompletionOut]:
-    records = require_postgres(lambda: reader.list_motif_completions(limit=limit, offset=offset, motif_name=motif_name))
+    """`start`/`end` (tasks.md F8.1/F8.3, added for Milestone F8): unlike
+    `/api/scores/entities`, `motif_completions` is append-only, so the
+    `total` this returns when either bound is set is an exact historical
+    count, not a latest-value proxy."""
+    records = require_postgres(lambda: reader.list_motif_completions(limit=limit, offset=offset, motif_name=motif_name, start=start, end=end))
     items = [MotifCompletionOut(**r.__dict__) for r in records]
-    return Paginated[MotifCompletionOut](items=items, limit=limit, offset=offset)
+    total = (
+        require_postgres(lambda: reader.count_motif_completions(motif_name=motif_name, start=start, end=end))
+        if (start is not None or end is not None)
+        else None
+    )
+    return Paginated[MotifCompletionOut](items=items, limit=limit, offset=offset, total=total)
 
 
 @router.get("/resets", response_model=Paginated[MotifResetOut])

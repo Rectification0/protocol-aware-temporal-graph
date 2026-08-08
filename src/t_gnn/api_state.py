@@ -383,6 +383,29 @@ class ApiStateWriter:
         self._execute(_run)
 
 
+def _time_range_conditions(column: str, start: Optional[float], end: Optional[float]) -> tuple[list[str], list]:
+    """tasks.md F8.1's shared `start`/`end` (unix seconds, inclusive)
+    filter -- one helper so `list_entity_scores`/`list_motif_completions`
+    and their `count_*` companions build the identical `WHERE` fragment
+    rather than each hand-rolling it."""
+    clauses: list[str] = []
+    params: list = []
+    if start is not None:
+        clauses.append(f"{column} >= %s")
+        params.append(start)
+    if end is not None:
+        clauses.append(f"{column} <= %s")
+        params.append(end)
+    return clauses, params
+
+
+def _time_range_clause(column: str, start: Optional[float], end: Optional[float]) -> tuple[str, list]:
+    """Same as `_time_range_conditions`, pre-joined with a leading
+    `WHERE` for callers with no other condition to `AND` it against."""
+    clauses, params = _time_range_conditions(column, start, end)
+    return (" WHERE " + " AND ".join(clauses) if clauses else ""), params
+
+
 class ApiStateReader:
     """The read side the FastAPI service (`t_gnn/api/`) queries -- no
     dependency on any bus or live engine object, only on Postgres, which is
@@ -412,29 +435,60 @@ class ApiStateReader:
             latest_inference_latency_seconds=row[5],
         )
 
-    def list_entity_scores(self, limit: int = 50, offset: int = 0) -> list[InferenceResult]:
+    def list_entity_scores(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        start: Optional[float] = None,
+        end: Optional[float] = None,
+    ) -> list[InferenceResult]:
         """Sorted by `abs(score)` descending (F0.3's "sortable by
-        abs(score)"), the same ordering `score_entities.py`'s CLI prints."""
+        abs(score)"), the same ordering `score_entities.py`'s CLI prints.
+        `start`/`end` (tasks.md F8.1, inclusive) filter on `t` -- since
+        `entity_scores` is upserted/latest-value-only (this file's own
+        module docstring), this selects entities whose *latest* score
+        happens to fall in the window, not a true historical count."""
+        query = "SELECT entity_id, score, t, trigger, motif_name FROM entity_scores"
+        clause, params = _time_range_clause("t", start, end)
+        query += clause + " ORDER BY abs(score) DESC LIMIT %s OFFSET %s"
+        params = params + [limit, offset]
         with self._connection_factory() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT entity_id, score, t, trigger, motif_name FROM entity_scores
-                    ORDER BY abs(score) DESC LIMIT %s OFFSET %s
-                    """,
-                    (limit, offset),
-                )
+                cur.execute(query, tuple(params))
                 rows = cur.fetchall()
         return [InferenceResult(entity_id=r[0], score=r[1], t=r[2], trigger=r[3], motif_name=r[4]) for r in rows]
 
-    def list_motif_completions(self, limit: int = 50, offset: int = 0, motif_name: Optional[str] = None) -> list[MotifCompletionRecord]:
+    def count_entity_scores(self, start: Optional[float] = None, end: Optional[float] = None) -> int:
+        """Companion to `list_entity_scores` -- an exact `COUNT(*)` for the
+        same `start`/`end` window (tasks.md F8.5's "average anomalies per
+        hour" needs the true count, not just a `limit`-bounded page)."""
+        clause, params = _time_range_clause("t", start, end)
+        with self._connection_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT count(*) FROM entity_scores" + clause, tuple(params))
+                return cur.fetchone()[0]
+
+    def list_motif_completions(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        motif_name: Optional[str] = None,
+        start: Optional[float] = None,
+        end: Optional[float] = None,
+    ) -> list[MotifCompletionRecord]:
+        """`start`/`end` (tasks.md F8.1, inclusive) filter on
+        `completed_at` -- unlike `entity_scores`, `motif_completions` is an
+        append-only log (every completion is inserted, never upserted), so
+        this count/window is exact, not a latest-value proxy."""
         query = "SELECT id, motif_name, chain_key, matched_edges, completed_at, confidence FROM motif_completions"
-        params: list = []
+        clauses, params = _time_range_conditions("completed_at", start, end)
         if motif_name is not None:
-            query += " WHERE motif_name = %s"
+            clauses.append("motif_name = %s")
             params.append(motif_name)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY completed_at DESC LIMIT %s OFFSET %s"
-        params.extend([limit, offset])
+        params = params + [limit, offset]
         with self._connection_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(query, tuple(params))
@@ -443,6 +497,26 @@ class ApiStateReader:
             MotifCompletionRecord(id=r[0], motif_name=r[1], chain_key=r[2], matched_edges=r[3], completed_at=r[4], confidence=r[5])
             for r in rows
         ]
+
+    def count_motif_completions(
+        self,
+        motif_name: Optional[str] = None,
+        start: Optional[float] = None,
+        end: Optional[float] = None,
+    ) -> int:
+        """Companion to `list_motif_completions` -- an exact `COUNT(*)`
+        for tasks.md F8.3's "number of attacks" / F8.4's "threat rate"."""
+        clauses, params = _time_range_conditions("completed_at", start, end)
+        if motif_name is not None:
+            clauses.append("motif_name = %s")
+            params.append(motif_name)
+        query = "SELECT count(*) FROM motif_completions"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        with self._connection_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, tuple(params))
+                return cur.fetchone()[0]
 
     def list_motif_resets(self, limit: int = 50, offset: int = 0) -> list[MotifResetRecord]:
         with self._connection_factory() as conn:

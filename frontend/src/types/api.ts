@@ -141,6 +141,20 @@ export interface HealthOut {
   last_metrics_snapshot_age_seconds: number | null
 }
 
+export interface DetectionMetricsOut {
+  true_positives: number
+  false_positives: number
+  false_negatives: number
+  precision: number | null
+  recall: number | null
+}
+
+export interface PilotReportOut {
+  anomaly: DetectionMetricsOut
+  motif: DetectionMetricsOut
+  evaluated_at: number
+}
+
 export interface AlertAckIn {
   detection_type: string
   detection_ref: string
