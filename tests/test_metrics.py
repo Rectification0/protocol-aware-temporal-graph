@@ -156,3 +156,24 @@ def test_snapshot_aggregates_all_five_quantities():
     assert snapshot.motif_hit_rate_per_second == 1 / 60.0
     assert snapshot.motif_reset_rate_per_second == 1 / 60.0
     assert snapshot.latest_inference_latency_seconds == 0.001
+
+
+# --- MetricsCollector: total_edges_processed (F14.3) -----------------------------
+
+
+def test_total_edges_processed_starts_at_zero():
+    store = ActiveGraphStore()
+    collector = MetricsCollector(store=store)
+    assert collector.snapshot(now=0.0).total_edges_processed == 0
+
+
+def test_total_edges_processed_increments_per_call_and_is_not_a_rate():
+    store = ActiveGraphStore()
+    collector = MetricsCollector(store=store)
+    for _ in range(3):
+        collector.observe_edge_processed()
+
+    # Unlike the rate counters above, this never evicts old entries --
+    # it's a running total for the life of this collector.
+    assert collector.snapshot(now=0.0).total_edges_processed == 3
+    assert collector.snapshot(now=10_000.0).total_edges_processed == 3

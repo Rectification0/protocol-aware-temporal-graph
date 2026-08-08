@@ -2,6 +2,7 @@ import type { ComponentType } from 'react'
 import {
   Activity,
   BarChart3,
+  Building2,
   LayoutDashboard,
   ScrollText,
   Settings,
@@ -27,6 +28,10 @@ export const ROUTES = {
   detections: '/detections',
   logs: '/logs',
   monitoring: '/monitoring',
+  // F14 (Company Security Overview): a new top-level route, not part of
+  // F2.1's original seven -- this milestone didn't exist yet when F2.1
+  // reserved its route list.
+  securityOverview: '/security-overview',
   settings: '/settings',
   login: '/login',
 } as const
@@ -48,6 +53,7 @@ export const NAV_ROUTES: NavRouteMeta[] = [
   { path: ROUTES.detections, label: 'Detections', icon: ShieldAlert },
   { path: ROUTES.logs, label: 'Logs', icon: ScrollText },
   { path: ROUTES.monitoring, label: 'Monitoring', icon: Activity },
+  { path: ROUTES.securityOverview, label: 'Company Overview', icon: Building2 },
   { path: ROUTES.settings, label: 'Settings', icon: Settings },
 ]
 

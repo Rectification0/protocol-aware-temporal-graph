@@ -2,6 +2,7 @@ import { apiRequest } from '@/api/client'
 import type {
   AlertAckIn,
   AlertAckOut,
+  AlertResponseTimeOut,
   AuditRecordOut,
   AuditRecordType,
   EntityScoreOut,
@@ -164,4 +165,9 @@ export function getHealth(signal?: AbortSignal) {
 
 export function acknowledgeAlert(body: AlertAckIn) {
   return apiRequest<AlertAckOut>('/api/alerts/ack', { method: 'POST', body })
+}
+
+// F14.4: average analyst-ack latency, over the most recent acknowledgements.
+export function getAlertResponseTime(signal?: AbortSignal) {
+  return apiRequest<AlertResponseTimeOut>('/api/alerts/response-time', { signal })
 }

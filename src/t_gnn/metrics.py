@@ -34,6 +34,12 @@ already comes from:
     `TGNNInferenceEngine` pass, recorded via `observe_inference_pass()`,
     which the caller invokes around each `run_once()`/`on_motif_completion()`
     call the same way `observe_pruning_pass()` wraps `PruningWatcher`.
+
+A sixth quantity, `total_edges_processed`, was added in tasks.md F14.3
+(Company Security Overview's "total processed logs") -- a lifetime
+counter rather than a rate, since none of the five above answer "how many
+logs/edges has this pipeline processed" at all. `observe_edge_processed()`
+is called once per edge by `scripts/run_pipeline.py`'s `_process_edge()`.
 """
 
 from __future__ import annotations
@@ -100,6 +106,15 @@ class MetricsSnapshot:
     motif_hit_rate_per_second: float
     motif_reset_rate_per_second: float
     latest_inference_latency_seconds: Optional[float]
+    # F14.3: a lifetime counter, not a rate -- `RollingRateCounter` only
+    # tracks a trailing window, which can't answer "how many logs/edges
+    # has this pipeline processed" (the Company Security Overview's own
+    # wording). Monotonically increasing for the life of this
+    # `MetricsCollector` instance, the same "resets if the pipeline
+    # process restarts" scope every other field here already has (none of
+    # `MetricsCollector`'s state survives a restart, only what's already
+    # been persisted via `record_metrics_snapshot` at each point in time).
+    total_edges_processed: int = 0
 
 
 class MetricsCollector:
@@ -126,6 +141,7 @@ class MetricsCollector:
         self.motif_reset_rate = RollingRateCounter(window_seconds)
         self.epsilon_history: list[EpsilonReading] = []
         self.inference_latency_history: list[InferenceLatencyReading] = []
+        self.total_edges_processed = 0
 
         if prune_bus is not None:
             prune_bus.subscribe(self._on_prune)
@@ -136,6 +152,12 @@ class MetricsCollector:
 
     def active_graph_size(self) -> int:
         return len(self.store)
+
+    def observe_edge_processed(self) -> None:
+        """F14.3: called once per edge by whoever drives `_process_edge()`
+        (`scripts/run_pipeline.py`) -- no bus for this, since it isn't an
+        event any other subscriber cares about, just a running total."""
+        self.total_edges_processed += 1
 
     def _on_prune(self, event: PrunedEdgeEvent) -> None:
         self.prune_rate.record(event.pruned_at)
@@ -174,4 +196,5 @@ class MetricsCollector:
             latest_inference_latency_seconds=(
                 self.inference_latency_history[-1].latency_seconds if self.inference_latency_history else None
             ),
+            total_edges_processed=self.total_edges_processed,
         )

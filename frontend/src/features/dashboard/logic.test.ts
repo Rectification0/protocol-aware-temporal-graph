@@ -19,6 +19,7 @@ function metrics(hitRatePerSecond: number): MetricsSnapshotOut {
     motif_hit_rate_per_second: hitRatePerSecond,
     motif_reset_rate_per_second: 0,
     latest_inference_latency_seconds: 0.01,
+    total_edges_processed: 0,
   }
 }
 

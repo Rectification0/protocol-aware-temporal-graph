@@ -317,6 +317,7 @@ def main() -> None:
     tick = 0
 
     def _process_edge(edge: Edge) -> None:
+        metrics.observe_edge_processed()
         processed = processor.process(edge, t=edge.t_e)
         store.upsert(processed.edge)
         inference_engine.observe_deviation(processed.deviation)

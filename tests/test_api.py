@@ -22,6 +22,7 @@ from t_gnn.api.app import app
 from t_gnn.api.deps import StreamConfig
 from t_gnn.api_state import (
     AlertAcknowledgementRecord,
+    AlertResponseTimeStats,
     EntityScoreUpdate,
     MotifCompletionRecord,
     MotifFeedbackRecord,
@@ -97,6 +98,18 @@ class FakeApiState:
 
     def list_alert_acknowledgements(self, limit=50, offset=0):
         return list(reversed(self.acks))[offset:offset + limit]
+
+    def average_response_time(self, limit=500):
+        deltas = []
+        for record in self.list_alert_acknowledgements(limit=limit):
+            try:
+                detected_at = float(record.detection_ref.rsplit(":", 1)[-1])
+            except ValueError:
+                continue
+            deltas.append(record.acknowledged_at - detected_at)
+        if not deltas:
+            return AlertResponseTimeStats(average_seconds=None, sample_size=0)
+        return AlertResponseTimeStats(average_seconds=sum(deltas) / len(deltas), sample_size=len(deltas))
 
     def record_motif_feedback(self, event):
         record = MotifFeedbackRecord(
@@ -182,14 +195,14 @@ def test_metrics_snapshot_returns_recorded_values(client, fake_state):
     fake_state.snapshot = MetricsSnapshot(
         active_graph_size=42, prune_rate_per_second=1.1, epsilon=0.3,
         motif_hit_rate_per_second=0.2, motif_reset_rate_per_second=0.1,
-        latest_inference_latency_seconds=0.005,
+        latest_inference_latency_seconds=0.005, total_edges_processed=1000,
     )
     response = client.get("/api/metrics/snapshot")
     assert response.status_code == 200
     assert response.json() == {
         "active_graph_size": 42, "prune_rate_per_second": 1.1, "epsilon": 0.3,
         "motif_hit_rate_per_second": 0.2, "motif_reset_rate_per_second": 0.1,
-        "latest_inference_latency_seconds": 0.005,
+        "latest_inference_latency_seconds": 0.005, "total_edges_processed": 1000,
     }
 
 
@@ -358,6 +371,27 @@ def test_acknowledge_alert(client, fake_state):
     assert response.status_code == 201
     assert response.json()["acknowledged_by"] == "bob"
     assert len(fake_state.acks) == 1
+
+
+def test_average_response_time_is_null_with_no_acks(client):
+    response = client.get("/api/alerts/response-time")
+    assert response.status_code == 200
+    assert response.json() == {"average_seconds": None, "sample_size": 0}
+
+
+def test_average_response_time_computed_from_detection_ref_timestamp(client, fake_state):
+    # motif_completion ref embeds completed_at=100.0; acked 30s later.
+    fake_state.acks.append(AlertAcknowledgementRecord(
+        id=1, detection_type="motif_completion", detection_ref="lateral_pivot:Machine:C1042:100.0",
+        acknowledged_by="bob", acknowledged_at=130.0, notes=None,
+    ))
+
+    response = client.get("/api/alerts/response-time")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sample_size"] == 1
+    assert body["average_seconds"] == pytest.approx(30.0)
 
 
 def test_health_reports_degraded_when_a_dependency_is_down(client, monkeypatch):

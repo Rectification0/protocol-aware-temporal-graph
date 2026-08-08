@@ -1,4 +1,4 @@
-"""F13.6: alert acknowledgement.
+"""F13.6: alert acknowledgement. F14.4: average response time.
 
 There is no single unified "alert id" across the two detection paths this
 repo has (a motif completion vs. an anomaly-path `InferenceResult`) --
@@ -11,6 +11,14 @@ use, rather than inventing a third, unified id space.
 Backing: new `alert_acknowledgements` table (`api_state.py`) -- there was
 no ack/disposition-beyond-feedback concept anywhere in this repo before
 this endpoint.
+
+`GET /response-time` (F14.4) is the Company Security Overview's "average
+response time" -- defined as analyst ack latency (detection -> ack),
+per that task's own instruction to decide a definition first, not
+time-to-detection (already covered elsewhere as inference latency).
+Reads `ApiStateReader.average_response_time()`, which was already able to
+reuse `list_alert_acknowledgements()` (real, tested, but with no HTTP
+consumer before this).
 """
 
 from __future__ import annotations
@@ -19,9 +27,9 @@ import time
 
 from fastapi import APIRouter, Depends
 
-from t_gnn.api.deps import get_writer, require_postgres
-from t_gnn.api.schemas import AlertAckIn, AlertAckOut
-from t_gnn.api_state import ApiStateWriter
+from t_gnn.api.deps import get_reader, get_writer, require_postgres
+from t_gnn.api.schemas import AlertAckIn, AlertAckOut, AlertResponseTimeOut
+from t_gnn.api_state import ApiStateReader, ApiStateWriter
 
 router = APIRouter(prefix="/api/alerts", tags=["alerts"])
 
@@ -39,3 +47,9 @@ def acknowledge_alert(body: AlertAckIn, writer: ApiStateWriter = Depends(get_wri
         detection_type=body.detection_type, detection_ref=body.detection_ref,
         acknowledged_by=body.analyst, acknowledged_at=acknowledged_at, notes=body.notes,
     )
+
+
+@router.get("/response-time", response_model=AlertResponseTimeOut)
+def read_average_response_time(reader: ApiStateReader = Depends(get_reader)) -> AlertResponseTimeOut:
+    stats = require_postgres(reader.average_response_time)
+    return AlertResponseTimeOut(average_seconds=stats.average_seconds, sample_size=stats.sample_size)

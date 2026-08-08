@@ -264,6 +264,24 @@ success. `src/store/autoRefreshStore.ts` backs a shared polling toggle +
 interval control on the Live Monitoring page for the two endpoints
 (metrics snapshot, health) with no matching live-stream event type.
 
+## Company Security Overview (Milestone F14)
+
+A new `/security-overview` page ("Company Overview" in the sidebar) --
+tasks.md's own line calls this "largely a second view over F6's data at a
+different altitude," so two of its four tiles are literally F6's existing
+`CybersecurityScoreTile`/`SecurityLevelTile`/`SystemHealthTile`/
+`MonitoringStatusTile` re-rendered on a new page, not rebuilt. Real new
+work: `MonitoredUsersTile` (F10.1's entity count), `ProcessedLogsTile`
+(reads a genuinely new backend field -- `MetricsSnapshot.total_edges_processed`,
+a lifetime counter added to `metrics.py` and persisted via this repo's
+first `ALTER TABLE` migration, since the table already existed in
+developers' databases), an `AnalyzedSessions` `BackendPendingState`
+(same "no session concept" gap F10.9 already found), and
+`AverageResponseTimeTile` (a new `GET /api/alerts/response-time` endpoint
+computing analyst-ack latency from data F13.6's acknowledgements already
+carry -- the definition tasks.md's own line asked to be decided before
+building anything).
+
 ## Commands
 
 ```bash

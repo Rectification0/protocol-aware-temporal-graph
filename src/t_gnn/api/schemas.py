@@ -39,6 +39,7 @@ class MetricsSnapshotOut(BaseModel):
     motif_hit_rate_per_second: float
     motif_reset_rate_per_second: float
     latest_inference_latency_seconds: Optional[float]
+    total_edges_processed: int = 0
 
 
 class EntityScoreOut(BaseModel):
@@ -187,3 +188,8 @@ class AlertAckOut(BaseModel):
     acknowledged_by: Optional[str]
     acknowledged_at: float
     notes: Optional[str]
+
+
+class AlertResponseTimeOut(BaseModel):
+    average_seconds: Optional[float]
+    sample_size: int

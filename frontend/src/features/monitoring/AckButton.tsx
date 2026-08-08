@@ -1,4 +1,6 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { Check } from 'lucide-react'
+import { queryKeys } from '@/api/queryKeys'
 import { Button } from '@/components/ui/button'
 import { useAlertAck } from '@/hooks/api'
 import { useAlertAckStore } from '@/store/alertAckStore'
@@ -10,7 +12,10 @@ import { useAuthStore } from '@/store/authStore'
 // (that hook's own comment), so "acknowledged" here is reflected via
 // `alertAckStore`'s client-side, session-scoped record, updated from this
 // mutation's own `onSuccess` -- the pattern that hook's comment already
-// prescribes.
+// prescribes. F14.4 added a real aggregate over these acks
+// (`GET /api/alerts/response-time`) -- also invalidated here, so acking
+// something refreshes that average immediately rather than waiting on
+// `useAlertResponseTime`'s own `staleTime`.
 export function AckButton({
   detectionType,
   detectionRef,
@@ -22,6 +27,7 @@ export function AckButton({
   const acked = useAlertAckStore((state) => state.isAcked(detectionType, detectionRef))
   const markAcked = useAlertAckStore((state) => state.markAcked)
   const ack = useAlertAck()
+  const queryClient = useQueryClient()
 
   if (acked) {
     return (
@@ -42,7 +48,12 @@ export function AckButton({
       onClick={() =>
         ack.mutate(
           { detection_type: detectionType, detection_ref: detectionRef, analyst },
-          { onSuccess: () => markAcked(detectionType, detectionRef) },
+          {
+            onSuccess: () => {
+              markAcked(detectionType, detectionRef)
+              void queryClient.invalidateQueries({ queryKey: queryKeys.alertResponseTime() })
+            },
+          },
         )
       }
     >

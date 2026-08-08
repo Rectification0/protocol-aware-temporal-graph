@@ -31,6 +31,7 @@ export interface MetricsSnapshotOut {
   motif_hit_rate_per_second: number
   motif_reset_rate_per_second: number
   latest_inference_latency_seconds: number | null
+  total_edges_processed: number
 }
 
 export interface EntityScoreOut {
@@ -168,4 +169,9 @@ export interface AlertAckOut {
   acknowledged_by: string | null
   acknowledged_at: number
   notes: string | null
+}
+
+export interface AlertResponseTimeOut {
+  average_seconds: number | null
+  sample_size: number
 }

@@ -105,6 +105,16 @@ describe('router (authenticated)', () => {
     expect(await screen.findByRole('heading', { name: 'Live Monitoring' })).toBeInTheDocument()
   })
 
+  it('renders the Company Security Overview page at /security-overview', async () => {
+    renderAt('/security-overview')
+
+    expect(
+      await screen.findByRole('heading', { name: 'Company Security Overview' }),
+    ).toBeInTheDocument()
+    // The new F14 nav entry.
+    expect(screen.getByRole('link', { name: 'Company Overview' })).toBeInTheDocument()
+  })
+
   it('renders NotFoundPage for an unmatched path under the shell', async () => {
     renderAt('/this-route-does-not-exist')
 

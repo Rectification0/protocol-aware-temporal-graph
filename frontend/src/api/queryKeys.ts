@@ -38,4 +38,6 @@ export const queryKeys = {
   pilotReport: () => ['pilot', 'latest-report'] as const,
   entities: (params: { type?: string; limit: number; offset: number }) =>
     ['entities', params] as const,
+  // F14.4: no params -- one aggregate over the most recent acknowledgements.
+  alertResponseTime: () => ['alerts', 'response-time'] as const,
 }

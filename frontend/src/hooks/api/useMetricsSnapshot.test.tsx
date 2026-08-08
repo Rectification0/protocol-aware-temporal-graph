@@ -25,6 +25,7 @@ describe('useMetricsSnapshot', () => {
       motif_hit_rate_per_second: 0.01,
       motif_reset_rate_per_second: 0.02,
       latest_inference_latency_seconds: 0.03,
+      total_edges_processed: 0,
     }
     vi.mocked(getMetricsSnapshot).mockResolvedValue(snapshot)
 

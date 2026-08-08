@@ -59,7 +59,7 @@ def test_metrics_snapshot_round_trip():
     snapshot = MetricsSnapshot(
         active_graph_size=10, prune_rate_per_second=1.5, epsilon=0.2,
         motif_hit_rate_per_second=0.1, motif_reset_rate_per_second=0.05,
-        latest_inference_latency_seconds=0.002,
+        latest_inference_latency_seconds=0.002, total_edges_processed=123,
     )
 
     writer.record_metrics_snapshot(snapshot, t=time.time())
@@ -324,6 +324,45 @@ def test_alert_acknowledgement_round_trip():
     assert len(records) == 1
     assert records[0].acknowledged_by == "bob"
     assert records[0].notes == "confirmed with the on-call team"
+
+
+@requires_postgres
+def test_average_response_time_uses_the_detection_ref_embedded_timestamp():
+    writer = ApiStateWriter(get_connection)
+    reader = ApiStateReader(get_connection)
+    detected_at = 1_000.0
+    ack_time = detected_at + 45.0
+
+    # No per-test cleanup fixture exists for this table (same limitation
+    # other live-Postgres tests in this file document), and
+    # `average_response_time()` has no filter to isolate by -- but it
+    # orders by `acknowledged_at DESC`, so `limit=1` deterministically
+    # picks up only the row this test itself just inserted (the newest),
+    # not whatever other tests left behind.
+    writer.record_alert_acknowledgement(
+        detection_type="anomaly", detection_ref=f"User:alice:{detected_at}",
+        analyst="bob", notes=None, t=ack_time,
+    )
+
+    stats = reader.average_response_time(limit=1)
+
+    assert stats.sample_size == 1
+    assert stats.average_seconds == pytest.approx(45.0)
+
+
+@requires_postgres
+def test_average_response_time_is_none_when_empty():
+    # This assertion only holds when this is the very first acknowledgement
+    # ever recorded for this dev database -- skip if that's not the case
+    # rather than asserting something false about a shared, uncleaned table.
+    reader = ApiStateReader(get_connection)
+    if reader.list_alert_acknowledgements(limit=1):
+        pytest.skip("alert_acknowledgements already has rows from a prior run -- can't assert emptiness")
+
+    stats = reader.average_response_time()
+
+    assert stats.average_seconds is None
+    assert stats.sample_size == 0
 
 
 @requires_postgres

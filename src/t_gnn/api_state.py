@@ -77,10 +77,18 @@ _DDL_STATEMENTS = (
         epsilon DOUBLE PRECISION,
         motif_hit_rate_per_second DOUBLE PRECISION NOT NULL,
         motif_reset_rate_per_second DOUBLE PRECISION NOT NULL,
-        latest_inference_latency_seconds DOUBLE PRECISION
+        latest_inference_latency_seconds DOUBLE PRECISION,
+        total_edges_processed BIGINT NOT NULL DEFAULT 0
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_metrics_snapshots_captured_at ON metrics_snapshots (captured_at DESC)",
+    # F14.3: `total_edges_processed` was added to `metrics_snapshots` after
+    # this table already existed in developers' local databases -- unlike
+    # every column above (all present since the table's first creation),
+    # a plain `CREATE TABLE IF NOT EXISTS` above won't retroactively add a
+    # column to an already-existing table, so this repo's first
+    # `ALTER TABLE` migration statement.
+    "ALTER TABLE metrics_snapshots ADD COLUMN IF NOT EXISTS total_edges_processed BIGINT NOT NULL DEFAULT 0",
     """
     CREATE TABLE IF NOT EXISTS entity_scores (
         entity_id TEXT PRIMARY KEY,
@@ -198,6 +206,19 @@ class AlertAcknowledgementRecord:
     notes: Optional[str]
 
 
+@dataclass(frozen=True)
+class AlertResponseTimeStats:
+    """F14.4: "average response time" defined as analyst ack latency --
+    the gap between when a detection happened and when an analyst
+    acknowledged it (F13.6) -- not time-to-detection (already measured
+    elsewhere as inference latency), per tasks.md's own instruction to
+    define this before building it. `None`/`0` when no acknowledgement
+    carries a parseable detection timestamp yet, not a fabricated 0s."""
+
+    average_seconds: Optional[float]
+    sample_size: int
+
+
 class ApiStateWriter:
     """Auto-subscribes to the live pipeline's buses (when given) and
     persists one row per event, so a separate API process can read this
@@ -283,13 +304,13 @@ class ApiStateWriter:
                     INSERT INTO metrics_snapshots
                         (captured_at, active_graph_size, prune_rate_per_second, epsilon,
                          motif_hit_rate_per_second, motif_reset_rate_per_second,
-                         latest_inference_latency_seconds)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                         latest_inference_latency_seconds, total_edges_processed)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         t, snapshot.active_graph_size, snapshot.prune_rate_per_second, snapshot.epsilon,
                         snapshot.motif_hit_rate_per_second, snapshot.motif_reset_rate_per_second,
-                        snapshot.latest_inference_latency_seconds,
+                        snapshot.latest_inference_latency_seconds, snapshot.total_edges_processed,
                     ),
                 )
 
@@ -422,7 +443,7 @@ class ApiStateReader:
                     """
                     SELECT active_graph_size, prune_rate_per_second, epsilon,
                            motif_hit_rate_per_second, motif_reset_rate_per_second,
-                           latest_inference_latency_seconds
+                           latest_inference_latency_seconds, total_edges_processed
                     FROM metrics_snapshots ORDER BY captured_at DESC LIMIT 1
                     """
                 )
@@ -432,7 +453,7 @@ class ApiStateReader:
         return MetricsSnapshot(
             active_graph_size=row[0], prune_rate_per_second=row[1], epsilon=row[2],
             motif_hit_rate_per_second=row[3], motif_reset_rate_per_second=row[4],
-            latest_inference_latency_seconds=row[5],
+            latest_inference_latency_seconds=row[5], total_edges_processed=row[6],
         )
 
     def list_entity_scores(
@@ -655,3 +676,26 @@ class ApiStateReader:
             AlertAcknowledgementRecord(id=r[0], detection_type=r[1], detection_ref=r[2], acknowledged_by=r[3], acknowledged_at=r[4], notes=r[5])
             for r in rows
         ]
+
+    def average_response_time(self, limit: int = 500) -> AlertResponseTimeStats:
+        """F14.4: average analyst-ack latency over the most recent `limit`
+        acknowledgements. Computed in Python, not SQL, over
+        `list_alert_acknowledgements()`'s own rows -- `alerts.py`'s
+        `detection_ref` already embeds the detection's own timestamp as
+        its trailing `:`-separated segment for both known detection types
+        (`{motif_name}:{chain_key}:{completed_at}` / `{entity_id}:{t}`),
+        and extracting that in Python avoids depending on a
+        Postgres-version-specific string function (`split_part`'s
+        negative-index form needs PG14+) for what's a small, infrequent
+        aggregate, not a hot path."""
+        records = self.list_alert_acknowledgements(limit=limit)
+        deltas: list[float] = []
+        for record in records:
+            try:
+                detected_at = float(record.detection_ref.rsplit(":", 1)[-1])
+            except ValueError:
+                continue
+            deltas.append(record.acknowledged_at - detected_at)
+        if not deltas:
+            return AlertResponseTimeStats(average_seconds=None, sample_size=0)
+        return AlertResponseTimeStats(average_seconds=sum(deltas) / len(deltas), sample_size=len(deltas))

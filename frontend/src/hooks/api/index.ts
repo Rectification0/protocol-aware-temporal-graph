@@ -2,6 +2,7 @@
 // reaching into individual hook files.
 
 export * from '@/hooks/api/useAlertAck'
+export * from '@/hooks/api/useAlertResponseTime'
 export * from '@/hooks/api/useAuditLog'
 export * from '@/hooks/api/useConfig'
 export * from '@/hooks/api/useEntities'
