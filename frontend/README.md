@@ -192,6 +192,33 @@ to fabricate any derived session-boundary heuristic, per that task's own
 explicit instruction. `RelativeTimestamp` (`src/components/`) was
 extracted here from a duplicate helper F9's Detection Matrix already had.
 
+## Log Explorer (Milestone F11)
+
+`src/pages/LogsPage.tsx`, backed by `src/features/logs/`, is F0.8's
+prune/motif-reset audit trail — explicitly the audit trail, not raw
+ingested Sysmon/Windows events (no raw-event store exists anywhere in
+this repo). Search (`q`), an `until` bound (paired with the existing
+`since`), and an `entity` filter are all real backend additions to
+`audit.py`'s `read_records()`/`GET /api/audit/log`, not client-side-only
+filtering — the endpoint already scans its whole file per request, so
+extending that scan was cheap. Time-range filtering reuses Milestone F8's
+shared `useTimeRangeStore`/`TimeRangeFilter` unchanged. Severity
+highlighting (`features/logs/logic.ts`'s `classifyLogSeverity()`) floors
+every motif-reset record at "medium" (a discarded partial detection chain
+is never routine) and derives a prune record's severity from how much
+weight (`w_at_prune`) it still carried at eviction — illustrative
+thresholds, not calibrated. "View raw" opens `RawLogDialog`, showing the
+literal record pretty-printed. CSV/JSON export covers the current fetched
+page only (documented in the page's own caption), not every page of the
+filtered result. Live updates deliberately do **not** silently reorder
+the table: `useAuditLog` gained a `refetchInterval` override (this page
+passes `false`) and `src/api/liveStream.ts`'s `prune` handler no longer
+invalidates the audit-log query at all — instead, new prune/motif-reset
+events stream in from `useLiveStreamStore`'s event feed, get filtered
+against the page's active search/type/entity/range criteria, and render
+prepended with a "New" pill plus a dismissible "N new events — Refresh"
+banner that triggers an explicit refetch.
+
 ## Commands
 
 ```bash

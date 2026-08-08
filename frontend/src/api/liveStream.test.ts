@@ -97,6 +97,34 @@ describe('LiveStreamManager', () => {
     manager.stop()
   })
 
+  it('pushes prune events into the store without invalidating the audit log query (F11.7)', () => {
+    const manager = new LiveStreamManager(
+      'http://api.test/api/stream/events',
+      queryClient,
+      factory(),
+    )
+    manager.start()
+
+    FakeEventSource.instances[0].emit('prune', {
+      type: 'prune',
+      edge_id: 'e1',
+      src: 'User:alice',
+      dst: 'Machine:C1',
+      logged_at: 100,
+    })
+
+    expect(useLiveStreamStore.getState().events).toHaveLength(1)
+    expect(useLiveStreamStore.getState().events[0].type).toBe('prune')
+    // Unlike the other three event types, a prune event must NOT trigger
+    // a refetch of the audit log query -- F11.7's Log Explorer surfaces
+    // new records as an explicit affordance instead of a silent reorder.
+    expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({
+      queryKey: ['audit', 'log'],
+    })
+
+    manager.stop()
+  })
+
   it('records heartbeats without adding them to the event feed', () => {
     const manager = new LiveStreamManager(
       'http://api.test/api/stream/events',

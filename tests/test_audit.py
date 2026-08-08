@@ -163,3 +163,66 @@ def test_read_records_skips_blank_lines(tmp_path):
     records = read_records(path)
 
     assert len(records) == 1
+
+
+# --- F11.2/F11.1: until/entity/q filters ------------------------------------------
+
+
+def test_read_records_filters_by_until(tmp_path):
+    path = tmp_path / "audit.log"
+    sink = FileAuditSink(path)
+    sink.write({"type": "prune", "edge_id": "a", "logged_at": 1.0})
+    sink.write({"type": "prune", "edge_id": "b", "logged_at": 2.0})
+    sink.write({"type": "prune", "edge_id": "c", "logged_at": 3.0})
+
+    records = read_records(path, until=2.0)
+
+    assert {r["edge_id"] for r in records} == {"a", "b"}
+
+
+def test_read_records_filters_by_entity_matches_prune_src_or_dst(tmp_path):
+    path = tmp_path / "audit.log"
+    sink = FileAuditSink(path)
+    sink.write({"type": "prune", "edge_id": "a", "src": "User:alice", "dst": "Machine:C1", "logged_at": 1.0})
+    sink.write({"type": "prune", "edge_id": "b", "src": "Machine:C1", "dst": "Machine:C2", "logged_at": 2.0})
+    sink.write({"type": "prune", "edge_id": "c", "src": "User:bob", "dst": "Machine:C3", "logged_at": 3.0})
+
+    records = read_records(path, entity="Machine:C1")
+
+    assert {r["edge_id"] for r in records} == {"a", "b"}
+
+
+def test_read_records_filters_by_entity_matches_motif_reset_chain_key(tmp_path):
+    path = tmp_path / "audit.log"
+    sink = FileAuditSink(path)
+    sink.write({"type": "motif_reset", "chain_key": "Machine:C1", "logged_at": 1.0})
+    sink.write({"type": "motif_reset", "chain_key": "Machine:C2", "logged_at": 2.0})
+
+    records = read_records(path, entity="Machine:C1")
+
+    assert len(records) == 1
+    assert records[0]["chain_key"] == "Machine:C1"
+
+
+def test_read_records_filters_by_q_case_insensitive_substring(tmp_path):
+    path = tmp_path / "audit.log"
+    sink = FileAuditSink(path)
+    sink.write({"type": "prune", "edge_id": "a", "protocol": "RDP", "logged_at": 1.0})
+    sink.write({"type": "prune", "edge_id": "b", "protocol": "SMB", "logged_at": 2.0})
+
+    records = read_records(path, q="rdp")
+
+    assert len(records) == 1
+    assert records[0]["edge_id"] == "a"
+
+
+def test_read_records_filters_by_q_matches_list_fields(tmp_path):
+    path = tmp_path / "audit.log"
+    sink = FileAuditSink(path)
+    sink.write({"type": "motif_reset", "chain_key": "k", "matched_edges": ["edge-123"], "logged_at": 1.0})
+    sink.write({"type": "motif_reset", "chain_key": "k2", "matched_edges": ["edge-999"], "logged_at": 2.0})
+
+    records = read_records(path, q="edge-123")
+
+    assert len(records) == 1
+    assert records[0]["chain_key"] == "k"

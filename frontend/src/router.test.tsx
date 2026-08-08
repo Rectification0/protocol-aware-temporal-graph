@@ -89,6 +89,14 @@ describe('router (authenticated)', () => {
     ).toBeInTheDocument()
   })
 
+  it('renders the Logs page at /logs', async () => {
+    renderAt('/logs')
+
+    // Milestone F11 replaced this page's placeholder heading with the
+    // real Log Explorer page.
+    expect(await screen.findByRole('heading', { name: 'Logs' })).toBeInTheDocument()
+  })
+
   it('renders NotFoundPage for an unmatched path under the shell', async () => {
     renderAt('/this-route-does-not-exist')
 

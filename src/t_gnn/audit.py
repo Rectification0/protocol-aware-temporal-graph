@@ -102,19 +102,30 @@ class AuditLogger:
 def read_records(
     path: Path,
     since: Optional[float] = None,
+    until: Optional[float] = None,
     record_type: Optional[str] = None,
+    entity: Optional[str] = None,
+    q: Optional[str] = None,
 ) -> list[dict]:
     """Reads `FileAuditSink`'s newline-delimited JSON records back out
-    (tasks.md F0.8's `GET /api/audit/log` backing) -- a plain file tail/scan
-    rather than a second store, since the log itself is already the durable
-    record NFR5 asks for. Returns records newest-first (matching every other
-    list endpoint's DESC-by-time convention), optionally filtered to
-    `logged_at >= since` and/or an exact `record_type` (`"prune"` /
-    `"motif_reset"`). Missing file reads as "no records yet", not an error --
-    a fresh pipeline run may not have pruned/reset anything yet.
+    (tasks.md F0.8's `GET /api/audit/log` backing, extended for F11's Log
+    Explorer) -- a plain file tail/scan rather than a second store, since
+    the log itself is already the durable record NFR5 asks for. Returns
+    records newest-first (matching every other list endpoint's DESC-by-time
+    convention), optionally filtered to `since <= logged_at <= until`
+    (both bounds inclusive, same convention `api_state.py`'s F8.1
+    `_time_range_clause` uses for entity scores/motif completions), an
+    exact `record_type` (`"prune"` / `"motif_reset"`), an `entity` (an
+    exact match against a prune record's `src`/`dst` or a motif-reset
+    record's `chain_key` -- F11.2's entity filter), and/or a freetext `q`
+    substring match (case-insensitive) across every string-valued field
+    on the record -- F11.1's search. Missing file reads as "no records
+    yet", not an error -- a fresh pipeline run may not have pruned/reset
+    anything yet.
     """
     if not path.exists():
         return []
+    q_lower = q.lower() if q else None
     records: list[dict] = []
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -124,8 +135,31 @@ def read_records(
             record = json.loads(line)
             if since is not None and record.get("logged_at", 0.0) < since:
                 continue
+            if until is not None and record.get("logged_at", 0.0) > until:
+                continue
             if record_type is not None and record.get("type") != record_type:
+                continue
+            if entity is not None and entity not in (
+                record.get("src"), record.get("dst"), record.get("chain_key"),
+            ):
+                continue
+            if q_lower is not None and not _record_matches_query(record, q_lower):
                 continue
             records.append(record)
     records.sort(key=lambda r: r.get("logged_at", 0.0), reverse=True)
     return records
+
+
+def _record_matches_query(record: dict, q_lower: str) -> bool:
+    """F11.1: does any string (or list-of-strings) field on `record`
+    contain `q_lower`? A plain substring scan over the record's own
+    values -- consistent with `read_records`'s existing "full scan is
+    cheap at this volume" posture, no search index needed."""
+    for value in record.values():
+        if isinstance(value, str) and q_lower in value.lower():
+            return True
+        if isinstance(value, list) and any(
+            isinstance(item, str) and q_lower in item.lower() for item in value
+        ):
+            return True
+    return False

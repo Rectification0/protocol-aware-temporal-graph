@@ -122,15 +122,29 @@ export function listMotifConfig(signal?: AbortSignal) {
   return apiRequest<MotifConfigOut[]>('/api/config/motifs', { signal })
 }
 
+// F11.1/F11.2: `until` mirrors F8.1's `start`/`end` bound naming (adapted
+// to this endpoint's existing `since` vocabulary rather than renaming it);
+// `entity` is an exact match against a prune record's src/dst or a
+// motif-reset's chain_key; `q` is a freetext substring match across every
+// record field (`audit.py`'s `_record_matches_query`).
 export function listAuditLog({
   limit,
   offset,
   since,
+  until,
   type,
+  entity,
+  q,
   signal,
-}: PageParams & { since?: number; type?: AuditRecordType } = {}) {
+}: PageParams & {
+  since?: number
+  until?: number
+  type?: AuditRecordType
+  entity?: string
+  q?: string
+} = {}) {
   return apiRequest<Paginated<AuditRecordOut>>('/api/audit/log', {
-    query: { limit, offset, since, type },
+    query: { limit, offset, since, until, type, entity, q },
     signal,
   })
 }

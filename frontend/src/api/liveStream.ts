@@ -120,7 +120,13 @@ export class LiveStreamManager {
     es.addEventListener('prune', (event) => {
       const data = JSON.parse((event as MessageEvent).data) as AuditRecordOut
       useLiveStreamStore.getState().pushEvent({ type: 'prune', data, receivedAt: Date.now() })
-      void this.queryClient.invalidateQueries({ queryKey: ['audit', 'log'] })
+      // Deliberately no `['audit', 'log']` invalidation here, unlike the
+      // other three handlers above: F11.7's Log Explorer is this query
+      // key's only consumer, and its acceptance criteria explicitly rule
+      // out silently reordering the currently-viewed page when a new
+      // record streams in -- new prune/motif-reset records should surface
+      // as an explicit "N new" affordance instead (`features/logs`),
+      // sourced from this store's own `events` feed, not from a refetch.
     })
     es.addEventListener('heartbeat', (event) => {
       const payload = JSON.parse((event as MessageEvent).data) as { t: number }

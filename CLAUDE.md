@@ -340,6 +340,57 @@ to build any derived-session heuristic, since that line explicitly
 forbids fabricating session boundaries without a real product decision.
 See the Architecture section addendum below for file-by-file detail.
 
+Milestone F11 (Log Explorer) is fully implemented: F11.1-F11.7 are all
+real, verified code, on a rebuilt `frontend/src/pages/LogsPage.tsx`
+(previously a placeholder) backed by a new `src/features/logs/` folder.
+F11.1 and F11.2 both needed real backend additions to `src/t_gnn/audit.py`'s
+`read_records()` (and the matching `/api/audit/log` query params): `q`
+(a case-insensitive freetext substring scan across every field on a
+record, via a new `_record_matches_query()`) for search, and `until`/
+`entity` (paired with the existing `since`, matching F8.1's bound-naming
+convention and F10.5's chain_key-filter precedent) for filtering --
+`read_records()` already did a full file scan per request (its own
+docstring), so extending that same scan cost nothing new. F11.2's
+time-range half deliberately reuses F8.1's shared `useTimeRangeStore`/
+`TimeRangeFilter` unchanged rather than a second store, since F8.1's own
+line already named F11 as a future consumer. F11.3's `RawLogDialog`
+renders the literal record via `JSON.stringify`, not a re-derived view.
+F11.4's severity derivation (`features/logs/logic.ts`'s
+`classifyLogSeverity()`) floors every motif-reset record at "medium" (a
+discarded partial detection chain is never routine housekeeping, the same
+floor-logic shape F9 uses for motif completions) and derives a prune
+record's severity from `w_at_prune` (illustrative thresholds, undocumented
+as calibrated, same posture as every other provisional severity scheme in
+this repo) -- pruned while still highly weighted implies a memory-pressure
+eviction cutting off still-relevant history, not an edge that simply
+finished decaying naturally. F11.5's CSV/JSON export is deliberately
+scoped to the current fetched page, not every page of the filtered
+result -- exporting the full filtered set would require re-fetching every
+page just for a download, and the page's own caption says so rather than
+silently under-exporting. F11.6 needed no new work: `audit.py`'s envelope
+already returns an exact `total`, so `useAuditLog` (F4.2) already produced
+an exact `pageCount` for F5.4's `DataTable`. F11.7 is the milestone's one
+genuine architectural wrinkle: its "no silent reordering" requirement is
+incompatible with two pieces of already-existing default behavior, both
+changed for this page specifically rather than globally -- `useAuditLog`
+gained a `refetchInterval` override (`LogsPage.tsx` passes `false`, opting
+out of F4.2's normal 10s polling refresh) and `liveStream.ts`'s `prune`
+SSE handler no longer invalidates the `['audit','log']` query key at all
+(that key has no other consumer, so the auto-refetch-on-invalidate
+convention every other F4.6 event type uses was actively wrong for this
+one page's acceptance criteria). Instead, `LogsPage.tsx` reads new
+prune/motif-reset events directly from `useLiveStreamStore`'s event feed
+-- a stream `motif_reset` event carries `MotifResetOut` (Postgres-sourced),
+not the audit log's own `AuditRecordOut` shape (file-sourced), so
+`logic.ts`'s `motifResetEventToAuditRecord()` adapts one into the other --
+filters them against the page's currently active search/type/entity/range
+criteria (`matchesLogFilters()`), and renders any not already on the
+fetched page prepended with a per-row "New" pill plus a dismissible
+"N new events -- Refresh" banner that triggers an explicit page-0 refetch,
+rather than ever silently invalidating the visible page out from under the
+analyst. See the Architecture section addendum below for file-by-file
+detail.
+
 ## End-of-phase / end-of-milestone checklist
 
 When every checkbox in a `tasks.md` phase (Phase 0-8, Backlog items) **or
@@ -377,6 +428,16 @@ flipped to done, before moving on:
    doc/config updates land in the same commit(s) as the phase's/milestone's
    code, not a follow-up commit — so `git log` never shows a phase or
    milestone "done" with its docs still pointing at the previous state.
+5. **Ask the developer before committing or pushing.** Finishing a phase's/
+   milestone's code and docs (1-3 above) does not itself mean "create the
+   commit(s)" or "push branch" — those are separate, explicit asks. Once the
+   work described above is ready, stop and summarize what would be
+   committed (files changed, proposed commit message(s), target branch) and
+   wait for the developer's go-ahead before running `git commit`/`git push`.
+   This applies even though step 4 says the doc/config updates belong in
+   the same commit as the code — that's guidance for *what* to bundle
+   together whenever a commit does happen, not a standing authorization to
+   commit automatically at the end of a phase/milestone.
 
 ## Commands
 
@@ -643,3 +704,12 @@ by the rest of the suite:
 - `frontend/src/pages/InvestigationPage.tsx` assembles F10.3 (a `StatCard` reusing `features/analytics/logic.ts`'s existing `classifyEntityScore()`/`THREAT_TIER_LABEL` -- the same provisional 3-tier classification F7.1 established, not a second one), F10.4/F10.6 (one `DataTable` titled "Activity Timeline / Log History," not two panels -- tasks.md's own F10.6 line forbids implying a second data source), F10.5 (a `DataTable` of `chain_key`-filtered motif completions -- deliberately not a second "deviation signals" panel, since `entity_scores`'s upserted/latest-value-only shape means there's no historical list of past deviation events to show beyond the single latest score F10.3 already displays), and F10.7-F10.9 (three `BackendPendingState` panels naming F0.13; F10.9's description explains *why* it's pending -- no product decision on deriving-vs-backing a session concept, not just "blocked" -- since that line explicitly forbids fabricating session boundaries in the meantime). `features/investigation/logic.ts`'s `FULL_HISTORY_WINDOW` is a fixed `{start: 0, end: 9_999_999_999}` constant (not a `Date.now()`-anchored one) so the timeline query has a well-defined default with no page-level time-range control to source one from, while keeping the module free of a render-time clock read.
 - `frontend/src/components/relative-timestamp.tsx`'s `RelativeTimestamp` was extracted from a component-local helper F9's `columns.tsx` already had, once F10's `columns.tsx` needed the identical "X ago, with the absolute time on hover" rendering a second time -- both files now import the shared one. F9's Detection Matrix `source` column and F10's timeline "Activity" column both gained real `investigationPath()` links, the first working "reached from elsewhere" traffic to the drill-down route `config/routes.ts`'s own comment already described but nothing had linked to yet.
 - Tests: `features/investigation/logic.test.ts` (`entityType()`'s prefix parsing, `FULL_HISTORY_WINDOW`'s shape), `components/relative-timestamp.test.tsx`, `pages/UserListPage.test.tsx` (link rendering, debounced client-side search, the error-state message), `pages/InvestigationPage.test.tsx` (all three panels rendering together for a real entity, plus the never-scored 404 case), and a `router.test.tsx` addition covering the new `/investigation` list route and `NAV_ROUTES` entry. Backend: `tests/test_api.py`/`test_api_state.py` gained cases for the point-lookup score endpoint, the `chain_key` filter, and `/api/entities`; `tests/test_forensics.py` gained live-Neo4j cases for `list_entities()`/`count_entities()` (using a per-test-unique type-prefix string, since the shared dev Neo4j instance already has other `User:*` entities from earlier tests/pipeline runs, and there's no per-test cleanup fixture in that file to isolate against). Verified concretely: the full backend `pytest` suite (294 passed, 2 skipped -- Neo4j/Redis-dependent tests unrelated to this milestone, live Postgres and Neo4j were both reachable and exercised), and on the frontend, `npx tsc -b --noEmit`, `npm run lint`, `npm run format:check`, `npm run build`, and `npm run test` (192 tests across 45 files, up from 182/41 pre-F10, stable across three repeated full-suite runs) all pass clean. The dev server (`npm run dev`) was started and `UserListPage.tsx`/`InvestigationPage.tsx`/`useEntities.ts` were confirmed to transform without error; a full visual check of the pages' live-backend rendering was not done this pass (no browser-automation tool was available in this session), same caveat every prior milestone's addendum already notes.
+
+**Frontend Implementation: Milestone F11 — Log Explorer.** Backend-first again for its search/filter half (F11.1/F11.2), the same shape F8/F10 already took, since `audit.py`'s `read_records()` had no text-search or `until`/`entity` filtering to build on top of.
+
+- `src/t_gnn/audit.py`'s `read_records()` gained three params: `q` (a new `_record_matches_query()` helper -- case-insensitive substring match against every string field on a record, including each entry of `matched_edges`), `until` (paired with the existing `since`, same inclusive-both-bounds shape `api_state.py`'s F8.1 `_time_range_clause` already established), and `entity` (exact match against a prune record's `src`/`dst` or a motif-reset's `chain_key`, the same shape F10.5's `chain_key` filter took). All three compose with the existing `since`/`record_type` filters via plain `and`-chained `continue`s in the same scan -- `read_records()` already read the whole file into memory per request (its own docstring's "full scan is cheap at this volume" posture), so none of this added a second pass. `src/t_gnn/api/routers/audit.py`'s `GET /api/audit/log` gained the matching `until`/`entity`/`q` query params, additive to F0.8's existing `since`/`type`/`limit`/`offset` -- every pre-F11 call site is unaffected.
+- `frontend/src/features/logs/logic.ts` is the pure-derivation layer, same split every earlier milestone's `logic.ts` established. `classifyLogSeverity()` (F11.4) floors every `motif_reset` record at `MOTIF_RESET_SEVERITY = 'medium'` (a discarded partial detection chain is never routine housekeeping -- the same "a structural match is never low-severity" floor F9's `severityFromMotifConfidence()` uses) and derives a `prune` record's severity from `w_at_prune` via `classifyPruneSeverity()`/`PRUNE_SEVERITY_THRESHOLDS` (illustrative, not calibrated, same posture as every other provisional threshold in this repo -- pruned while still highly weighted implies a memory-pressure eviction cutting off still-relevant history, not an edge that simply finished decaying). `summarizeLogRecord()`/`logRecordEntity()`/`logRowKey()` build a `LogRow` (`toLogRow()`) from either record type; `motifResetEventToAuditRecord()` adapts F0.10's live-stream `MotifResetOut` payload (Postgres-sourced, from `ApiStateReader.list_motif_resets_since()`) into the audit log's own `AuditRecordOut` shape (file-sourced, from `FileAuditSink`) so both a fetched page and a live event render through the same `LogRow`/`SeverityBadge`/summary path. `matchesQuery()`/`matchesEntity()`/`matchesLogFilters()` mirror the backend's own `q`/`entity`/time-range filtering client-side, used only for judging whether a not-yet-fetched live event belongs in F11.7's preview under the page's current filters -- the fetched page itself is always filtered server-side. `logsToCsv()`/`logsToJson()` (F11.5) are plain string builders with no DOM dependency, kept testable; the actual `Blob`/`URL.createObjectURL` download trigger is a small `downloadFile()` helper local to `LogsPage.tsx` (the one DOM-touching piece, deliberately not in the pure `logic.ts` module).
+- `frontend/src/features/logs/columns.tsx`'s `createLogColumns()` (F11.1/F11.4) takes an `onViewRaw` callback rather than owning dialog state itself -- the same composed-stateful-cell-but-not-page-state split F9's `DispositionCell`/`DetectionsPage.tsx` already established. A leading "New" pill column (F11.7) renders only for rows flagged `isNew`; severity renders via F5.14's existing `SeverityBadge` (no new badge vocabulary needed since `ThreatSeverity` already covers "medium"/"low"/"info"); the entity column links to `investigationPath()`, F9/F10's established drill-down convention. `frontend/src/features/logs/raw-log-dialog.tsx`'s `RawLogDialog` (F11.3) is a shadcn `Dialog` (F5.9) rendering `JSON.stringify(row.record, null, 2)` in a `<pre>` -- the literal raw record, not a second, re-derived view of it, per this task's own instruction.
+- `frontend/src/hooks/api/useAuditLog.ts` gained `until`/`entity`/`q` on its filters object (mirroring the backend/`endpoints.ts` additions) and a new `UseAuditLogOptions.refetchInterval` override (default `10_000`, unchanged for every other consumer -- there are none yet, but the option exists for exactly this milestone's need) -- F11.7's page passes `false` to opt out of F4.2's normal polling refresh, since that refresh would otherwise silently reorder the visible page every 10s independent of the live stream. `frontend/src/api/liveStream.ts`'s `prune` SSE handler had its `invalidateQueries({queryKey: ['audit', 'log']})` call removed entirely (the only place in `liveStream.ts` that queries a key with zero live consumers other than this page) -- a comment at the call site explains why, and `liveStream.test.ts` gained a case asserting a `prune` event pushes into the store without triggering that invalidation.
+- `frontend/src/pages/LogsPage.tsx` assembles all of the above: F5.7's `SearchBar` (query), a plain `Input` (entity), a `Select` (type), and F8.1's existing `TimeRangeFilter`/`useTimeRangeStore` (time range, reused unchanged, not a second store) behind F5.6's `FilterBar` chips; a `DataTable` (F5.4) in server-driven-pagination mode (F11.6) with `createLogColumns()`; F11.5's two export buttons, captioned as covering only the current fetched page; and F11.7's "N new events -- Refresh" banner plus prepended `isNew` rows, computed by intersecting `useLiveStreamStore`'s event feed against the currently active filters and the already-fetched page's own row keys (so an event already visible via a normal fetch is never double-counted as "new"). No route changes needed -- `/logs` and its `NAV_ROUTES` entry already existed from F2.
+- Tests: `features/logs/logic.test.ts` (every severity threshold boundary on both record types, summary/entity/key derivation for both record types, the stream-event-to-audit-record adapter, query/entity/combined-filter matching, and CSV quoting/list-joining plus JSON round-tripping), `api/liveStream.test.ts`'s new no-invalidation case, and `pages/LogsPage.test.tsx` (rendering both record types with correct severity, the empty state, opening the raw-log dialog, search/entity filters re-querying the mocked endpoint with the right params, and the live "new event" banner/prepended-row/no-extra-fetch behavior together). Backend: `tests/test_audit.py` gained `until`/`entity`/`q` cases for `read_records()` (including matching inside `matched_edges` list entries) and `tests/test_api.py` gained the matching HTTP-layer cases for `/api/audit/log`. Verified concretely: the full backend `pytest` suite (291 passed, 13 skipped -- Neo4j/Redis-dependent tests across the suite, unrelated to this milestone; the local `docker compose` stack was paused when this pass started, briefly unpaused to let those tests exercise real Postgres/Neo4j/Redis, then re-paused afterward to leave the developer's environment as found), and on the frontend, `npx tsc -b --noEmit`, `npm run lint`, `npm run format:check`, `npm run build`, and `npm run test` (227 tests across 47 files, up from 192/45 pre-F11) all pass clean. The dev server was not separately started this pass beyond the build/test verification above -- same "no browser-automation tool available" caveat every prior milestone's addendum already notes, so a full visual check of the page's live-backend rendering was not done.

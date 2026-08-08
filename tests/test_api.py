@@ -438,6 +438,40 @@ def test_audit_log_paginates(client):
     assert body["items"][0]["edge_id"] == "e4"
 
 
+def test_audit_log_filters_by_until(client):
+    sink = FileAuditSink(app.dependency_overrides[deps.audit_log_path]())
+    sink.write({"type": "prune", "edge_id": "a", "logged_at": 1.0})
+    sink.write({"type": "prune", "edge_id": "b", "logged_at": 5.0})
+
+    response = client.get("/api/audit/log?until=2.0")
+
+    items = response.json()["items"]
+    assert [i["edge_id"] for i in items] == ["a"]
+
+
+def test_audit_log_filters_by_entity(client):
+    sink = FileAuditSink(app.dependency_overrides[deps.audit_log_path]())
+    sink.write({"type": "prune", "edge_id": "a", "src": "User:alice", "dst": "Machine:C1", "logged_at": 1.0})
+    sink.write({"type": "prune", "edge_id": "b", "src": "User:bob", "dst": "Machine:C2", "logged_at": 2.0})
+
+    response = client.get("/api/audit/log?entity=User:alice")
+
+    items = response.json()["items"]
+    assert [i["edge_id"] for i in items] == ["a"]
+
+
+def test_audit_log_filters_by_freetext_query(client):
+    sink = FileAuditSink(app.dependency_overrides[deps.audit_log_path]())
+    sink.write({"type": "motif_reset", "chain_key": "lateral_pivot_chain", "logged_at": 1.0})
+    sink.write({"type": "motif_reset", "chain_key": "other_chain", "logged_at": 2.0})
+
+    response = client.get("/api/audit/log?q=lateral")
+
+    items = response.json()["items"]
+    assert len(items) == 1
+    assert items[0]["chain_key"] == "lateral_pivot_chain"
+
+
 # --- F8.4: GET /api/pilot/latest-report --------------------------------------------
 
 

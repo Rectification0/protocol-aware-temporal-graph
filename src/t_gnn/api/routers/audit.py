@@ -31,12 +31,17 @@ router = APIRouter(prefix="/api/audit", tags=["audit"])
 @router.get("/log", response_model=Paginated[AuditRecordOut])
 def list_audit_log(
     since: Optional[float] = Query(default=None, description="only records with logged_at >= since"),
+    until: Optional[float] = Query(default=None, description="only records with logged_at <= until"),
     type: Optional[Literal["prune", "motif_reset"]] = Query(default=None),
+    entity: Optional[str] = Query(
+        default=None, description="exact match against a prune record's src/dst or a motif-reset's chain_key"
+    ),
+    q: Optional[str] = Query(default=None, description="freetext substring match across all record fields"),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     path: Path = Depends(audit_log_path),
 ) -> Paginated[AuditRecordOut]:
-    records = read_records(path, since=since, record_type=type)
+    records = read_records(path, since=since, until=until, record_type=type, entity=entity, q=q)
     page = records[offset:offset + limit]
     items = [AuditRecordOut(**r) for r in page]
     return Paginated[AuditRecordOut](items=items, limit=limit, offset=offset, total=len(records))

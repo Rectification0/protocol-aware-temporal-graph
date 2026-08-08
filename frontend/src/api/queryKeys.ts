@@ -24,8 +24,15 @@ export const queryKeys = {
   prunedEdge: (edgeId: string) => ['forensics', 'edge', edgeId] as const,
   protocolConfig: () => ['config', 'protocols'] as const,
   motifConfig: () => ['config', 'motifs'] as const,
-  auditLog: (params: { limit: number; offset: number; since?: number; type?: string }) =>
-    ['audit', 'log', params] as const,
+  auditLog: (params: {
+    limit: number
+    offset: number
+    since?: number
+    until?: number
+    type?: string
+    entity?: string
+    q?: string
+  }) => ['audit', 'log', params] as const,
   health: () => ['health'] as const,
   // F8.4: no params -- there is exactly one "latest" report file.
   pilotReport: () => ['pilot', 'latest-report'] as const,

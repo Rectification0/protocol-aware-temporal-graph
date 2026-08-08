@@ -8,7 +8,11 @@ data/lanl/raw/*.gz
 data/lanl/staged/
 data/lanl/simulated/
 data/mordor/
-logs/
+# Root-anchored (not a bare `logs/`) so it only ignores this repo's own
+# audit-log output directory (scripts/run_pipeline.py's default
+# `logs/audit.log`) and doesn't shadow `frontend/src/features/logs/`
+# (Milestone F11's Log Explorer) or any other nested `logs` directory.
+/logs/
 
 # Local Claude Code tooling (skills/config auto-installed into this repo's
 # .claude/ directory) -- editor/agent tooling config, not project source.
