@@ -48,7 +48,7 @@ describe('LiveEventFeed', () => {
     render(<LiveEventFeed />, { wrapper })
 
     expect(screen.getByText('Pruned Authentication: User:alice -> Machine:C1')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Ack' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Ack/ })).not.toBeInTheDocument()
   })
 
   it('renders a motif completion row with an Ack action', () => {
@@ -68,7 +68,7 @@ describe('LiveEventFeed', () => {
     render(<LiveEventFeed />, { wrapper })
 
     expect(screen.getByText('lateral_pivot completed (chain Machine:C1)')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Ack' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Ack/ })).toBeInTheDocument()
   })
 
   it('shows the stream error banner', () => {

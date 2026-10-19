@@ -45,6 +45,9 @@ export function AckButton({
       size="sm"
       className="h-7 px-2 text-xs"
       disabled={ack.isPending}
+      // F16.3: names the detection being acknowledged, starting with the
+      // visible "Ack" (WCAG 2.5.3 label-in-name).
+      aria-label={`Ack: acknowledge ${detectionRef}`}
       onClick={() =>
         ack.mutate(
           { detection_type: detectionType, detection_ref: detectionRef, analyst },

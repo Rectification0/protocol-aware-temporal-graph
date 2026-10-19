@@ -175,7 +175,7 @@ export function HeatmapChart({
                         title={text}
                         data-peak={isPeak || undefined}
                         className={cn(
-                          'size-5 rounded-[3px] transition-transform duration-150 hover:scale-125 sm:size-6',
+                          'size-5 rounded-[3px] transition-transform duration-150 motion-safe:hover:scale-125 sm:size-6',
                           isPeak && 'ring-2 ring-foreground ring-offset-1 ring-offset-card',
                         )}
                         style={{ backgroundColor: heatColor(heatStep(value, max)) }}

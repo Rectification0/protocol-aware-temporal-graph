@@ -29,11 +29,18 @@ export function CriticalAlertsPanel() {
   )
 
   if (criticalEvents.length === 0) {
-    return <p className="text-sm text-muted-foreground">No critical alerts right now.</p>
+    return (
+      <div aria-live="polite">
+        <p className="text-sm text-muted-foreground">No critical alerts right now.</p>
+      </div>
+    )
   }
 
   return (
-    <div className="space-y-2">
+    // F16.3: a polite live region -- a newly arrived critical alert is
+    // announced without stealing focus. (The raw event feed deliberately
+    // isn't one: announcing every SSE event would be unusable.)
+    <div className="space-y-2" aria-live="polite" aria-relevant="additions">
       {criticalEvents.map((event) => {
         const detection = detectionRefFor(event)
         return (

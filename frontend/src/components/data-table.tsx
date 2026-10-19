@@ -70,6 +70,8 @@ export interface DataTableProps<TData> {
   pageCount?: number
   pagination?: PaginationState
   onPaginationChange?: OnChangeFn<PaginationState>
+  /** F16.3: accessible name for the table, e.g. "Detections". */
+  label?: string
   className?: string
 }
 
@@ -85,6 +87,7 @@ export function DataTable<TData>({
   pageCount,
   pagination,
   onPaginationChange,
+  label,
   className,
 }: DataTableProps<TData>) {
   const [sorting, setSorting] = useState<SortingState>([])
@@ -121,7 +124,7 @@ export function DataTable<TData>({
   return (
     <div className={cn('space-y-3', className)}>
       <div className="rounded-md border">
-        <Table>
+        <Table aria-label={label}>
           <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (
               <TableRow key={headerGroup.id}>
@@ -130,20 +133,35 @@ export function DataTable<TData>({
                   const sortDirection = header.column.getIsSorted()
 
                   return (
-                    <TableHead key={header.id}>
+                    <TableHead
+                      key={header.id}
+                      // F16.3: screen readers announce the current sort.
+                      aria-sort={
+                        !canSort
+                          ? undefined
+                          : sortDirection === 'asc'
+                            ? 'ascending'
+                            : sortDirection === 'desc'
+                              ? 'descending'
+                              : 'none'
+                      }
+                    >
                       {header.isPlaceholder ? null : canSort ? (
                         <button
                           type="button"
-                          className="flex cursor-pointer items-center gap-1 select-none"
+                          className="flex cursor-pointer items-center gap-1 rounded-sm select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           onClick={header.column.getToggleSortingHandler()}
                         >
                           {flexRender(header.column.columnDef.header, header.getContext())}
                           {sortDirection === 'asc' ? (
-                            <ArrowUp className="size-3.5" />
+                            <ArrowUp className="size-3.5" aria-hidden="true" />
                           ) : sortDirection === 'desc' ? (
-                            <ArrowDown className="size-3.5" />
+                            <ArrowDown className="size-3.5" aria-hidden="true" />
                           ) : (
-                            <ChevronsUpDown className="size-3.5 text-muted-foreground/50" />
+                            <ChevronsUpDown
+                              className="size-3.5 text-muted-foreground/50"
+                              aria-hidden="true"
+                            />
                           )}
                         </button>
                       ) : (
@@ -189,7 +207,7 @@ export function DataTable<TData>({
         </Table>
       </div>
 
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-sm text-muted-foreground">
           {enableRowSelection &&
             `${table.getFilteredSelectedRowModel().rows.length} of ${table.getFilteredRowModel().rows.length} row(s) selected.`}

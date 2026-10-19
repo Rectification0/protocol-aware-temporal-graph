@@ -58,6 +58,7 @@ export function Component() {
       <LoadErrorNotice failures={[entities.isError && { label: 'Users', error: entities.error }]} />
       <SectionErrorBoundary label="Users table" resetKey={search}>
         <DataTable
+          label="Users"
           columns={columns}
           data={filteredRows}
           loading={entities.isLoading}

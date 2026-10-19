@@ -138,7 +138,7 @@ export function Component() {
             setPagination((p) => ({ ...p, pageIndex: 0 }))
           }}
           placeholder="Search logs..."
-          className="w-64"
+          className="w-full sm:w-64"
         />
         <Input
           value={entity ?? ''}
@@ -147,7 +147,7 @@ export function Component() {
             setPagination((p) => ({ ...p, pageIndex: 0 }))
           }}
           placeholder="Filter by entity id..."
-          className="h-9 w-56"
+          className="h-9 w-full sm:w-56"
         />
         <Select
           value={type ?? ALL_VALUE}
@@ -156,7 +156,10 @@ export function Component() {
             setPagination((p) => ({ ...p, pageIndex: 0 }))
           }}
         >
-          <SelectTrigger className="h-9 w-40">
+          <SelectTrigger
+            className="h-9 w-full sm:w-40"
+            aria-label={`Record type: ${type ? TYPE_LABEL[type] : 'All types'}`}
+          >
             <SelectValue placeholder="Type" />
           </SelectTrigger>
           <SelectContent>
@@ -180,7 +183,7 @@ export function Component() {
       />
 
       {newRows.length > 0 && (
-        <div className="flex items-center justify-between rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-sm">
           <span>
             {newRows.length} new log {newRows.length === 1 ? 'event' : 'events'} since this page was
             loaded.
@@ -191,7 +194,7 @@ export function Component() {
         </div>
       )}
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button
           type="button"
           variant="outline"
@@ -228,6 +231,7 @@ export function Component() {
         resetKey={`${pagination.pageIndex}|${pagination.pageSize}|${type}|${entity}|${query}|${range.start}|${range.end}`}
       >
         <DataTable
+          label="Audit log records"
           columns={createLogColumns(setRawLogRow)}
           data={displayRows}
           loading={auditLog.isLoading}

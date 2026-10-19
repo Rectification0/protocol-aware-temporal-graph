@@ -97,8 +97,8 @@ describe('DetectionsPage (Milestone F9 Detection Matrix)', () => {
     render(<DetectionsPage />, { wrapper })
 
     expect(await screen.findByText('n/a')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'TP' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'FP' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^TP/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^FP/ })).not.toBeInTheDocument()
   })
 
   it('submits a true-positive disposition for a motif row using the logged-in analyst', async () => {
@@ -127,7 +127,7 @@ describe('DetectionsPage (Milestone F9 Detection Matrix)', () => {
 
     render(<DetectionsPage />, { wrapper })
 
-    await user.click(await screen.findByRole('button', { name: 'TP' }))
+    await user.click(await screen.findByRole('button', { name: /^TP/ }))
 
     await waitFor(() =>
       expect(submitMotifFeedback).toHaveBeenCalledWith({

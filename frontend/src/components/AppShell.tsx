@@ -41,11 +41,22 @@ export function AppShell() {
 
   return (
     <div className="flex min-h-svh flex-col">
+      {/* F16.3: first focusable element -- lets keyboard users jump past the
+          navbar and sidebar straight to the page. */}
+      <a
+        href="#main-content"
+        className="sr-only z-50 rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground focus:not-sr-only focus:fixed focus:left-3 focus:top-3"
+      >
+        Skip to main content
+      </a>
       <LiveNotifications enabled={hasSession} />
       <Navbar />
       <div className="flex flex-1">
         <Sidebar />
-        <main className="flex-1 p-6">
+        {/* F16.1: `min-w-0` lets this flex child shrink below its content's
+            intrinsic width, so a wide table scrolls inside its own wrapper
+            instead of pushing the whole page sideways on a phone. */}
+        <main id="main-content" tabIndex={-1} className="min-w-0 flex-1 p-4 outline-none sm:p-6">
           <Outlet />
         </main>
       </div>

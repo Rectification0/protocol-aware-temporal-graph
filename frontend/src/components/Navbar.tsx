@@ -1,5 +1,6 @@
 import { BellOff, ShieldHalf } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import { MobileNav } from '@/components/MobileNav'
 import { SectionErrorBoundary } from '@/components/section-error-boundary'
 import { Button } from '@/components/ui/button'
 import { ROUTES } from '@/config/routes'
@@ -27,15 +28,17 @@ export function Navbar() {
   }
 
   return (
-    <header className="flex h-14 items-center border-b border-border px-4">
-      <div className="flex items-center gap-2">
-        <ShieldHalf className="size-5 text-primary" />
-        <strong className="font-mono text-sm font-semibold tracking-tight">
+    <header className="flex h-14 items-center gap-2 border-b border-border px-4">
+      {/* F16.1: the drawer trigger, below `md` only (Sidebar is hidden there). */}
+      {session && <MobileNav />}
+      <div className="flex min-w-0 items-center gap-2">
+        <ShieldHalf className="size-5 shrink-0 text-primary" aria-hidden="true" />
+        <strong className="truncate font-mono text-sm font-semibold tracking-tight">
           T-GNN SOC Dashboard
         </strong>
       </div>
       {session && (
-        <div className="ml-auto flex items-center gap-3">
+        <div className="ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
           <SectionErrorBoundary
             label="Notifications"
             fallback={({ reset }) => (
@@ -53,7 +56,9 @@ export function Navbar() {
           >
             <NotificationsPanel />
           </SectionErrorBoundary>
-          <span className="text-sm text-muted-foreground">{session.analyst}</span>
+          <span className="hidden max-w-40 truncate text-sm text-muted-foreground sm:inline">
+            {session.analyst}
+          </span>
           <Button variant="outline" size="sm" onClick={handleLogout}>
             Log out
           </Button>

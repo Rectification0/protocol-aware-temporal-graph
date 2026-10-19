@@ -58,6 +58,9 @@ function DispositionCell({ row }: { row: DetectionRow }) {
           className="h-6 px-1.5 text-xs"
           disabled={submitFeedback.isPending}
           onClick={() => mark('true_positive')}
+          // F16.3: says *which* detection; starts with the visible "TP" so
+          // voice control ("click TP") still matches (WCAG 2.5.3).
+          aria-label={`TP: mark ${row.category} on ${row.chainKey ?? 'this entity'} as a true positive`}
         >
           TP
         </Button>
@@ -68,6 +71,7 @@ function DispositionCell({ row }: { row: DetectionRow }) {
           className="h-6 px-1.5 text-xs"
           disabled={submitFeedback.isPending}
           onClick={() => mark('false_positive')}
+          aria-label={`FP: mark ${row.category} on ${row.chainKey ?? 'this entity'} as a false positive`}
         >
           FP
         </Button>

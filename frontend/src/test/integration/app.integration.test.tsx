@@ -171,7 +171,7 @@ describe('shared state across pages', () => {
         .pushEvent({ type: 'motif_completion', data: event, receivedAt: Date.now() })
     })
 
-    const ackButtons = await screen.findAllByRole('button', { name: 'Ack' })
+    const ackButtons = await screen.findAllByRole('button', { name: /^Ack/ })
     await user.click(ackButtons[0])
 
     await waitFor(() =>
@@ -185,7 +185,7 @@ describe('shared state across pages', () => {
     // The same detection shows in both Critical Alerts and the event feed;
     // one ack (shared alertAckStore key) settles every copy of it.
     expect(ackButtons.length).toBeGreaterThan(1)
-    expect(screen.queryAllByRole('button', { name: 'Ack' })).toHaveLength(0)
+    expect(screen.queryAllByRole('button', { name: /^Ack/ })).toHaveLength(0)
     expect(api.acknowledgeAlert).toHaveBeenCalledTimes(1)
   })
 
@@ -199,7 +199,7 @@ describe('shared state across pages', () => {
     })
     renderApp('/detections')
 
-    await user.click(await screen.findByRole('button', { name: 'TP' }))
+    await user.click(await screen.findByRole('button', { name: /^TP/ }))
 
     await waitFor(() =>
       expect(api.submitMotifFeedback).toHaveBeenCalledWith(
@@ -242,5 +242,17 @@ describe('failure containment (F16.9)', () => {
       expect(screen.queryByText('Something went wrong')).not.toBeInTheDocument()
       unmount()
     }
+  })
+})
+
+describe('keyboard access (F16.3)', () => {
+  it('offers a skip link straight to the main content', async () => {
+    useAuthStore.getState().login('alice')
+    renderApp('/')
+    await screen.findByRole('heading', { name: 'Overview' })
+
+    const skip = screen.getByRole('link', { name: 'Skip to main content' })
+    expect(skip).toHaveAttribute('href', '#main-content')
+    expect(document.getElementById('main-content')?.tagName).toBe('MAIN')
   })
 })

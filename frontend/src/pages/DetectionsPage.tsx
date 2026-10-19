@@ -100,7 +100,10 @@ export function Component() {
             }))
           }
         >
-          <SelectTrigger className="h-8 w-40">
+          <SelectTrigger
+            className="h-8 w-full sm:w-40"
+            aria-label={`Severity: ${filters.severity ?? 'All severities'}`}
+          >
             <SelectValue placeholder="Severity" />
           </SelectTrigger>
           <SelectContent>
@@ -122,7 +125,10 @@ export function Component() {
             }))
           }
         >
-          <SelectTrigger className="h-8 w-44">
+          <SelectTrigger
+            className="h-8 w-full sm:w-44"
+            aria-label={`Status: ${filters.disposition ? DISPOSITION_LABEL[filters.disposition] : 'All statuses'}`}
+          >
             <SelectValue placeholder="Status" />
           </SelectTrigger>
           <SelectContent>
@@ -141,7 +147,10 @@ export function Component() {
             setFilters((f) => ({ ...f, category: value === ALL_VALUE ? null : value }))
           }
         >
-          <SelectTrigger className="h-8 w-48">
+          <SelectTrigger
+            className="h-8 w-full sm:w-48"
+            aria-label={`Category: ${filters.category ?? 'All categories'}`}
+          >
             <SelectValue placeholder="Category" />
           </SelectTrigger>
           <SelectContent>
@@ -170,6 +179,7 @@ export function Component() {
           usable); changing a filter retries. */}
       <SectionErrorBoundary label="Detections table" resetKey={JSON.stringify(filters)}>
         <DataTable
+          label="Detections"
           columns={detectionColumns}
           data={filteredRows}
           loading={isLoading}

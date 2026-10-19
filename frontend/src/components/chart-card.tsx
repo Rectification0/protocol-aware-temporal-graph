@@ -1,5 +1,5 @@
 import { ArrowDownRight, ArrowUpRight, Minus } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { useId, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -84,6 +84,7 @@ export function ChartCard({
   children,
 }: ChartCardProps) {
   const [showTable, setShowTable] = useState(false)
+  const captionId = useId()
 
   return (
     <Card className={cn('flex flex-col', className)}>
@@ -121,11 +122,22 @@ export function ChartCard({
             {delta && <DeltaChip delta={delta} />}
           </div>
         )}
-        {caption && <p className="text-xs text-muted-foreground">{caption}</p>}
+        {caption && (
+          <p id={captionId} className="text-xs text-muted-foreground">
+            {caption}
+          </p>
+        )}
       </CardHeader>
       <CardContent
         className={cn('flex-1 transition-opacity duration-300', refreshing && 'opacity-60')}
         aria-busy={refreshing || undefined}
+
+        // F16.3: the chart region is a named figure (the card title),
+        // described by the caption -- a screen reader hears what the plot
+        // shows, and the "Show table" twin carries every value.
+        role="figure"
+        aria-label={title}
+        aria-describedby={caption ? captionId : undefined}
       >
         {showTable && table ? (
           <Table>

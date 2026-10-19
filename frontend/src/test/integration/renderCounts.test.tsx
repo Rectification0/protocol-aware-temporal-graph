@@ -15,7 +15,9 @@ vi.mock('@/api/endpoints', async () => {
   const { endpointMockFactory } = await import('@/test/integration/endpointMocks')
   return endpointMockFactory()
 })
-vi.mock('@/components/Sidebar', () => ({
+vi.mock('@/components/Sidebar', async (importOriginal) => ({
+  // Keep NavLinks real -- MobileNav (in the Navbar) renders it.
+  ...(await importOriginal<object>()),
   Sidebar: () => {
     renders.sidebar++
     return <nav aria-label="Main navigation" />

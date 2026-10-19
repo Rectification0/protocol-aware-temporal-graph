@@ -11,15 +11,15 @@ import { env } from '@/config/env'
 export function ApiConfigSection() {
   return (
     <div className="space-y-2 text-sm">
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
         <span className="text-muted-foreground">API base URL</span>
         <code className="rounded bg-muted px-2 py-1 text-xs">{env.apiBaseUrl}</code>
       </div>
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
         <span className="text-muted-foreground">Environment</span>
         <code className="rounded bg-muted px-2 py-1 text-xs">{import.meta.env.MODE}</code>
       </div>
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
         <span className="text-muted-foreground">Configured by</span>
         <code className="rounded bg-muted px-2 py-1 text-xs">
           {env.apiBaseUrlSource === 'runtime'

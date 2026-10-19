@@ -45,7 +45,7 @@ describe('CriticalAlertsPanel', () => {
 
     expect(screen.getByText('Motif completed')).toBeInTheDocument()
     expect(screen.getByText('lateral_pivot completed (chain Machine:C1)')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Ack' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Ack/ })).toBeInTheDocument()
   })
 
   it('excludes non-critical events', () => {

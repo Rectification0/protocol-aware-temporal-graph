@@ -27,7 +27,7 @@ describe('AckButton', () => {
   it('shows an Ack button when not yet acknowledged', () => {
     render(<AckButton detectionType="anomaly" detectionRef="User:alice:100" />, { wrapper })
 
-    expect(screen.getByRole('button', { name: 'Ack' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Ack/ })).toBeInTheDocument()
   })
 
   it('submits the ack with the logged-in analyst and flips to Acknowledged', async () => {
@@ -42,7 +42,7 @@ describe('AckButton', () => {
     const user = userEvent.setup()
 
     render(<AckButton detectionType="anomaly" detectionRef="User:alice:100" />, { wrapper })
-    await user.click(screen.getByRole('button', { name: 'Ack' }))
+    await user.click(screen.getByRole('button', { name: /^Ack/ }))
 
     await waitFor(() =>
       expect(acknowledgeAlert).toHaveBeenCalledWith({
@@ -61,6 +61,6 @@ describe('AckButton', () => {
     render(<AckButton detectionType="anomaly" detectionRef="User:alice:100" />, { wrapper })
 
     expect(screen.getByText('Acknowledged')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Ack' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Ack/ })).not.toBeInTheDocument()
   })
 })

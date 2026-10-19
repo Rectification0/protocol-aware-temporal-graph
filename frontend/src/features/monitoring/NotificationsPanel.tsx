@@ -60,7 +60,7 @@ export function NotificationsPanel() {
           <Bell className="size-4" />
           {unreadCount > 0 && (
             <span
-              className="absolute -right-0.5 -top-0.5 flex size-4 items-center justify-center rounded-full bg-severity-critical text-[10px] font-semibold text-white"
+              className="absolute -right-0.5 -top-0.5 flex size-4 items-center justify-center rounded-full bg-severity-critical text-[10px] font-semibold text-background"
               aria-label={`${unreadCount} unread alerts`}
             >
               {unreadCount > 9 ? '9+' : unreadCount}

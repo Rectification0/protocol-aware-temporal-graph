@@ -74,6 +74,7 @@ export function Component() {
               exists beyond this.
             </p>
             <DataTable
+              label="Activity timeline"
               columns={timelineColumns(entityId)}
               data={timeline.data ?? []}
               loading={timeline.isLoading}
@@ -97,6 +98,7 @@ export function Component() {
           </CardHeader>
           <CardContent>
             <DataTable
+              label="Triggered rules"
               columns={triggeredRuleColumns}
               data={triggeredRules.rows}
               loading={triggeredRules.isLoading}

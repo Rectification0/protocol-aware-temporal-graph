@@ -72,8 +72,13 @@ export function LiveEventFeed() {
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-3">
-          <StatusPill tone={connectionStatusTone(status)} label={CONNECTION_STATUS_LABEL[status]} />
+        <div className="flex flex-wrap items-center gap-3">
+          <span role="status" aria-label={`Live stream: ${CONNECTION_STATUS_LABEL[status]}`}>
+            <StatusPill
+              tone={connectionStatusTone(status)}
+              label={CONNECTION_STATUS_LABEL[status]}
+            />
+          </span>
           {lastHeartbeatAt !== null && (
             <span className="text-xs text-muted-foreground">
               Last heartbeat{' '}

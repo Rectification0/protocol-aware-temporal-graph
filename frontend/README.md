@@ -327,6 +327,11 @@ retrofitted with `persist` in this pass -- previously in-memory only).
   memoized rows. `npm run check:bundle` guards the initial-load budget.
   Recharts loads lazily through `@/components/charts`. Below-the-fold
   sections use `DeferUntilVisible`.
+- **Responsive and accessible (F16.1/F16.3).** Below `md`, navigation moves
+  into a drawer (`MobileNav`). Every page passes an automated axe-core scan
+  (`src/test/integration/a11y.integration.test.tsx`). There's a skip link,
+  sortable columns announce their sort, and tables, charts and filters are
+  labelled.
 - **Charts.** Every analytics chart sits in a `ChartCard`. It leads with a
   headline number, adds a delta vs the previous period where the data is
   append-only, captions the source, and toggles to a table view. Trends are
