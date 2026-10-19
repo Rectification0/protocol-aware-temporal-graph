@@ -1,4 +1,5 @@
 import { AutoRefreshControl } from '@/components/AutoRefreshControl'
+import { SectionErrorBoundary } from '@/components/section-error-boundary'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { AlertThresholdsSection } from '@/features/settings/AlertThresholdsSection'
 import { ApiConfigSection } from '@/features/settings/ApiConfigSection'
@@ -25,7 +26,9 @@ export function Component() {
           <CardDescription>Display preference, saved in this browser.</CardDescription>
         </CardHeader>
         <CardContent>
-          <ThemeSection />
+          <SectionErrorBoundary label="Appearance">
+            <ThemeSection />
+          </SectionErrorBoundary>
         </CardContent>
       </Card>
 
@@ -37,7 +40,9 @@ export function Component() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <NotificationSection />
+          <SectionErrorBoundary label="Notification settings">
+            <NotificationSection />
+          </SectionErrorBoundary>
         </CardContent>
       </Card>
 
@@ -49,7 +54,9 @@ export function Component() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <AutoRefreshControl />
+          <SectionErrorBoundary label="Auto-refresh">
+            <AutoRefreshControl />
+          </SectionErrorBoundary>
         </CardContent>
       </Card>
 
@@ -59,7 +66,9 @@ export function Component() {
           <CardDescription>Read-only -- set via build/start-time environment.</CardDescription>
         </CardHeader>
         <CardContent>
-          <ApiConfigSection />
+          <SectionErrorBoundary label="API configuration">
+            <ApiConfigSection />
+          </SectionErrorBoundary>
         </CardContent>
       </Card>
 
@@ -71,7 +80,9 @@ export function Component() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <AlertThresholdsSection />
+          <SectionErrorBoundary label="Alert thresholds">
+            <AlertThresholdsSection />
+          </SectionErrorBoundary>
         </CardContent>
       </Card>
     </section>

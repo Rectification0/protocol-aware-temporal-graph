@@ -1,4 +1,5 @@
 import { TimeRangeFilter } from '@/components/time-range-filter'
+import { SectionErrorBoundary } from '@/components/section-error-boundary'
 import { AttackFrequencyHeatmap } from '@/features/analytics/AttackFrequencyHeatmap'
 import { AttackPatternsChart } from '@/features/analytics/AttackPatternsChart'
 import { AttacksInRangeTile } from '@/features/analytics/AttacksInRangeTile'
@@ -40,31 +41,59 @@ export function Component() {
         <TimeRangeFilter />
       </div>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <UserThreatCountsPanel />
-        <LiveAttackCounter />
+        <SectionErrorBoundary label="User threat counts">
+          <UserThreatCountsPanel />
+        </SectionErrorBoundary>
+        <SectionErrorBoundary label="Live attack counter">
+          <LiveAttackCounter />
+        </SectionErrorBoundary>
       </div>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="lg:col-span-2">
-          <ThreatTrendsChart />
+          <SectionErrorBoundary label="Threat trends">
+            <ThreatTrendsChart />
+          </SectionErrorBoundary>
         </div>
-        <ThreatSeverityChart />
+        <SectionErrorBoundary label="Threat severity">
+          <ThreatSeverityChart />
+        </SectionErrorBoundary>
       </div>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
-        <HackersDetectedTile />
-        <AttacksInRangeTile />
-        <ThreatRateTile />
-        <DetectionRateTile />
-        <AvgAnomaliesPerHourTile />
+        <SectionErrorBoundary label="Hackers detected">
+          <HackersDetectedTile />
+        </SectionErrorBoundary>
+        <SectionErrorBoundary label="Attacks in range">
+          <AttacksInRangeTile />
+        </SectionErrorBoundary>
+        <SectionErrorBoundary label="Threat rate">
+          <ThreatRateTile />
+        </SectionErrorBoundary>
+        <SectionErrorBoundary label="Detection rate">
+          <DetectionRateTile />
+        </SectionErrorBoundary>
+        <SectionErrorBoundary label="Anomalies per hour">
+          <AvgAnomaliesPerHourTile />
+        </SectionErrorBoundary>
       </div>
 
       <h2 className="text-lg font-semibold">Visualizations</h2>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <DetectionAccuracyChart />
-        <GeographicAttackMapCard />
-        <AttackFrequencyHeatmap />
-        <TopTargetedResourcesChart />
+        <SectionErrorBoundary label="Detection accuracy">
+          <DetectionAccuracyChart />
+        </SectionErrorBoundary>
+        <SectionErrorBoundary label="Geographic attack map">
+          <GeographicAttackMapCard />
+        </SectionErrorBoundary>
+        <SectionErrorBoundary label="Attack frequency heatmap">
+          <AttackFrequencyHeatmap />
+        </SectionErrorBoundary>
+        <SectionErrorBoundary label="Top targeted resources">
+          <TopTargetedResourcesChart />
+        </SectionErrorBoundary>
         <div className="lg:col-span-2">
-          <AttackPatternsChart />
+          <SectionErrorBoundary label="Attack patterns">
+            <AttackPatternsChart />
+          </SectionErrorBoundary>
         </div>
       </div>
     </section>

@@ -7,8 +7,14 @@ import { ROUTES } from '@/config/routes'
 // nested under it (set as the root layout route's `errorElement`) --
 // distinct from NotFoundPage, which handles a *matched* but nonexistent
 // path (the `path: '*'` route), not a thrown error.
+//
+// F16.9: also mounted one level down (`inShell`), on the authenticated
+// layout route, so a page that throws renders this inside AppShell's
+// Outlet -- Navbar/Sidebar stay usable to navigate away -- instead of
+// bubbling up to the root boundary, which replaces the whole shell. The
+// root instance remains the backstop for the shell itself throwing.
 
-export function RouteErrorBoundary() {
+export function RouteErrorBoundary({ inShell = false }: { inShell?: boolean }) {
   const error = useRouteError()
 
   const message = isRouteErrorResponse(error)
@@ -18,7 +24,13 @@ export function RouteErrorBoundary() {
       : 'Unknown error'
 
   return (
-    <div className="flex min-h-svh items-center justify-center p-6">
+    <div
+      className={
+        inShell
+          ? 'flex items-center justify-center py-12'
+          : 'flex min-h-svh items-center justify-center p-6'
+      }
+    >
       <EmptyState
         title="Something went wrong"
         description={message}

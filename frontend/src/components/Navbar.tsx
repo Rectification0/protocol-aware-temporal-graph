@@ -1,5 +1,6 @@
-import { ShieldHalf } from 'lucide-react'
+import { BellOff, ShieldHalf } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import { SectionErrorBoundary } from '@/components/section-error-boundary'
 import { Button } from '@/components/ui/button'
 import { ROUTES } from '@/config/routes'
 import { NotificationsPanel } from '@/features/monitoring/NotificationsPanel'
@@ -11,6 +12,9 @@ import { useAuthStore } from '@/store/authStore'
 // wherever a later milestone actually needs them (F13's alerts, etc.)" --
 // F13.4's `NotificationsPanel` is that later milestone, added alongside
 // the logout control, gated the same way (only once a session exists).
+// F16.9: the bell gets its own error boundary -- the Navbar is outside
+// every route-level `errorElement` except the root one, so an uncaught
+// throw here would otherwise replace the entire app shell.
 
 export function Navbar() {
   const session = useAuthStore((state) => state.session)
@@ -32,7 +36,23 @@ export function Navbar() {
       </div>
       {session && (
         <div className="ml-auto flex items-center gap-3">
-          <NotificationsPanel />
+          <SectionErrorBoundary
+            label="Notifications"
+            fallback={({ reset }) => (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label="Notifications unavailable -- retry"
+                title="Notifications unavailable -- retry"
+                onClick={reset}
+              >
+                <BellOff />
+              </Button>
+            )}
+          >
+            <NotificationsPanel />
+          </SectionErrorBoundary>
           <span className="text-sm text-muted-foreground">{session.analyst}</span>
           <Button variant="outline" size="sm" onClick={handleLogout}>
             Log out

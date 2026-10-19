@@ -25,6 +25,10 @@ export const routes: RouteObject[] = [
       {
         // F2.4: stubbed auth gate, currently a pass-through.
         element: <ProtectedRoute />,
+        // F16.9: page-level boundary rendered inside the shell, so a
+        // crashing page (or a failed lazy chunk import) keeps the
+        // Navbar/Sidebar -- see `RouteErrorBoundary`'s comment.
+        errorElement: <RouteErrorBoundary inShell />,
         children: [
           { index: true, lazy: () => import('@/pages/HomePage') },
           { path: 'analytics', lazy: () => import('@/pages/AnalyticsPage') },

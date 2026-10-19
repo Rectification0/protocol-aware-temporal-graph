@@ -19,7 +19,7 @@ that finished core.
 - F0.11 (`[~]`, partial) — real login/authorization; F0.12/F0.13/F0.14 (`[ ]`, `[BACKEND TODO]`) — cybersecurity-score formula, IP/device/session-history fields, geo data — all genuine data-model/product decisions blocking several frontend panels, not oversights.
 
 **Frontend (`frontend_implementation` branch)**
-- Milestone F16 — Quality, Accessibility & Testing (9 tasks: responsive pass, dark mode, a11y, unit/integration tests, perf, code-splitting/lazy-loading verification, error boundaries) — not started.
+- Milestone F16 — Quality, Accessibility & Testing (9 tasks: responsive pass, dark mode, a11y, unit/integration tests, perf, code-splitting/lazy-loading verification, error boundaries) — in progress (F16.9 error boundaries done).
 - Milestone F17 — Deployment (5 tasks: production build pipeline, containerization, reverse-proxy/CORS, CI deploy job, docs) — not started.
 - Frontend Backlog FB.1 — editable alert-thresholds write path (F15.5's own explicitly-flagged follow-up) — blocked on a real backend config-write API + authorization model (F0.11).
 
@@ -355,7 +355,7 @@ Largely a second view over F6/F0.12's data at a different altitude (company-wide
 - [ ] F16.6 Performance optimization pass (bundle size, memoization on high-frequency live-updating components from F13). — Complexity: M — Depends on: F13 complete.
 - [ ] F16.7 Code splitting verification (confirm F2.3's route-level splitting is actually reducing initial bundle). — Complexity: S — Depends on: F2.3.
 - [ ] F16.8 Lazy loading for below-the-fold/heavy components (charts, tables with large datasets). — Complexity: S — Depends on: F5.4, F5.5.
-- [ ] F16.9 Error boundaries per major page/section so one panel's failure (e.g. a `[BACKEND TODO]` endpoint that 404s) doesn't blank the whole dashboard — pairs with F5.13's empty states. — Complexity: S — Depends on: F2.5, F5.13.
+- [x] F16.9 Error boundaries per major page/section so one panel's failure (e.g. a `[BACKEND TODO]` endpoint that 404s) doesn't blank the whole dashboard — pairs with F5.13's empty states. *(Two layers. Page: the authenticated layout route (`ProtectedRoute`) gained its own `errorElement` -- `RouteErrorBoundary inShell` -- so a crashing page or failed lazy-chunk import renders inside AppShell's Outlet with Navbar/Sidebar intact; the root `errorElement` remains only as the backstop for the shell itself. Section: new `components/section-error-boundary.tsx` (`SectionErrorBoundary`, a class component -- React still has no hook for `componentDidCatch`) wraps every independent tile/chart/panel on Overview, Analytics, Security Overview, Monitoring, Settings and Investigation (the latter with `resetKey={entityId}` so a crash doesn't stick across entity navigation), plus the Navbar's notifications bell (compact `fallback` icon, since the Navbar sits outside every route boundary but the root). Single-table pages (Detections/Logs/Users) rely on the page-level layer alone -- the table is the page. Note the task text's own example: a 404ing `[BACKEND TODO]` endpoint isn't a render crash -- TanStack Query surfaces it as `isError`, already rendered by each tile's unavailable state -- so these boundaries catch genuine render bugs only. tests: section-error-boundary.test.tsx, router.errorBoundary.test.tsx.)* — Complexity: S — Depends on: F2.5, F5.13.
 
 ### Milestone F17 — Deployment
 

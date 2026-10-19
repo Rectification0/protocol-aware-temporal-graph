@@ -1,4 +1,5 @@
 import { AutoRefreshControl } from '@/components/AutoRefreshControl'
+import { SectionErrorBoundary } from '@/components/section-error-boundary'
 import { CriticalAlertsPanel } from '@/features/monitoring/CriticalAlertsPanel'
 import { LiveEventFeed } from '@/features/monitoring/LiveEventFeed'
 
@@ -18,17 +19,23 @@ export function Component() {
       <h1 className="text-2xl font-semibold">Live Monitoring</h1>
 
       <div className="rounded-md border p-4">
-        <AutoRefreshControl />
+        <SectionErrorBoundary label="Auto-refresh">
+          <AutoRefreshControl />
+        </SectionErrorBoundary>
       </div>
 
       <div className="space-y-2">
         <h2 className="text-lg font-semibold">Critical Alerts</h2>
-        <CriticalAlertsPanel />
+        <SectionErrorBoundary label="Critical alerts">
+          <CriticalAlertsPanel />
+        </SectionErrorBoundary>
       </div>
 
       <div className="space-y-2">
         <h2 className="text-lg font-semibold">Live Event Stream</h2>
-        <LiveEventFeed />
+        <SectionErrorBoundary label="Live event stream">
+          <LiveEventFeed />
+        </SectionErrorBoundary>
       </div>
     </section>
   )

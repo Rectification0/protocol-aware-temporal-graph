@@ -2,6 +2,7 @@ import type { PaginationState } from '@tanstack/react-table'
 import { useParams } from 'react-router-dom'
 import { DataTable } from '@/components/data-table'
 import { BackendPendingState } from '@/components/empty-state'
+import { SectionErrorBoundary } from '@/components/section-error-boundary'
 import { StatCard } from '@/components/stat-card'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { classifyEntityScore, THREAT_TIER_LABEL } from '@/features/analytics/logic'
@@ -35,74 +36,80 @@ export function Component() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <StatCard
-          label="Risk Score"
-          loading={score.isLoading}
-          unavailable={
-            !score.isLoading && !score.data
-              ? tileUnavailableMessage(score.error, 'This entity has never been scored')
-              : undefined
-          }
-          value={
-            tier && (
-              <div className="space-y-1.5">
-                <StatusPill tone={TIER_TONE[tier]} label={THREAT_TIER_LABEL[tier]} />
-                <p className="text-xs font-normal text-muted-foreground">
-                  score {score.data?.score.toFixed(2)} -- provisional classification (tasks.md
-                  F7.1/F10.3), pending F0.12
-                </p>
-              </div>
-            )
-          }
-        />
+        <SectionErrorBoundary label="Risk score" resetKey={entityId}>
+          <StatCard
+            label="Risk Score"
+            loading={score.isLoading}
+            unavailable={
+              !score.isLoading && !score.data
+                ? tileUnavailableMessage(score.error, 'This entity has never been scored')
+                : undefined
+            }
+            value={
+              tier && (
+                <div className="space-y-1.5">
+                  <StatusPill tone={TIER_TONE[tier]} label={THREAT_TIER_LABEL[tier]} />
+                  <p className="text-xs font-normal text-muted-foreground">
+                    score {score.data?.score.toFixed(2)} -- provisional classification (tasks.md
+                    F7.1/F10.3), pending F0.12
+                  </p>
+                </div>
+              )
+            }
+          />
+        </SectionErrorBoundary>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm font-medium text-muted-foreground">
-            Activity Timeline / Log History
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="mb-3 text-xs text-muted-foreground">
-            Every pruned edge touching this entity, from Neo4j cold storage -- the same data backs
-            both "timeline" and "log history" (tasks.md F10.6): no separate store of raw events
-            exists beyond this.
-          </p>
-          <DataTable
-            columns={timelineColumns(entityId)}
-            data={timeline.data ?? []}
-            loading={timeline.isLoading}
-            emptyMessage={
-              timeline.isError
-                ? tileUnavailableMessage(timeline.error, 'Unable to load activity')
-                : 'No pruned-edge activity recorded for this entity yet.'
-            }
-            getRowId={(edge) => edge.edge_id}
-          />
-        </CardContent>
-      </Card>
+      <SectionErrorBoundary label="Activity timeline" resetKey={entityId}>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Activity Timeline / Log History
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="mb-3 text-xs text-muted-foreground">
+              Every pruned edge touching this entity, from Neo4j cold storage -- the same data backs
+              both "timeline" and "log history" (tasks.md F10.6): no separate store of raw events
+              exists beyond this.
+            </p>
+            <DataTable
+              columns={timelineColumns(entityId)}
+              data={timeline.data ?? []}
+              loading={timeline.isLoading}
+              emptyMessage={
+                timeline.isError
+                  ? tileUnavailableMessage(timeline.error, 'Unable to load activity')
+                  : 'No pruned-edge activity recorded for this entity yet.'
+              }
+              getRowId={(edge) => edge.edge_id}
+            />
+          </CardContent>
+        </Card>
+      </SectionErrorBoundary>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm font-medium text-muted-foreground">
-            Triggered Rules
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <DataTable
-            columns={triggeredRuleColumns}
-            data={triggeredRules.rows}
-            loading={triggeredRules.isLoading}
-            emptyMessage={
-              triggeredRules.isError
-                ? tileUnavailableMessage(triggeredRules.error, 'Unable to load triggered rules')
-                : 'This entity has never triggered a motif completion.'
-            }
-            getRowId={(completion) => String(completion.id)}
-          />
-        </CardContent>
-      </Card>
+      <SectionErrorBoundary label="Triggered rules" resetKey={entityId}>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Triggered Rules
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <DataTable
+              columns={triggeredRuleColumns}
+              data={triggeredRules.rows}
+              loading={triggeredRules.isLoading}
+              emptyMessage={
+                triggeredRules.isError
+                  ? tileUnavailableMessage(triggeredRules.error, 'Unable to load triggered rules')
+                  : 'This entity has never triggered a motif completion.'
+              }
+              getRowId={(completion) => String(completion.id)}
+            />
+          </CardContent>
+        </Card>
+      </SectionErrorBoundary>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <BackendPendingState

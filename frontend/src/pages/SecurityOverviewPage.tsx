@@ -1,4 +1,5 @@
 import { BackendPendingState } from '@/components/empty-state'
+import { SectionErrorBoundary } from '@/components/section-error-boundary'
 import { CybersecurityScoreTile } from '@/features/dashboard/CybersecurityScoreTile'
 import { MonitoringStatusTile } from '@/features/dashboard/MonitoringStatusTile'
 import { SecurityLevelTile } from '@/features/dashboard/SecurityLevelTile'
@@ -30,8 +31,12 @@ export function Component() {
       <div>
         <h2 className="text-lg font-semibold">Security Posture</h2>
         <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <CybersecurityScoreTile />
-          <SecurityLevelTile />
+          <SectionErrorBoundary label="Cybersecurity score">
+            <CybersecurityScoreTile />
+          </SectionErrorBoundary>
+          <SectionErrorBoundary label="Security level">
+            <SecurityLevelTile />
+          </SectionErrorBoundary>
         </div>
       </div>
 
@@ -43,20 +48,28 @@ export function Component() {
           (specs.md &sect;4's explicit non-goal).
         </p>
         <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <SystemHealthTile />
-          <MonitoringStatusTile />
+          <SectionErrorBoundary label="System health">
+            <SystemHealthTile />
+          </SectionErrorBoundary>
+          <SectionErrorBoundary label="Monitoring status">
+            <MonitoringStatusTile />
+          </SectionErrorBoundary>
         </div>
       </div>
 
       <div>
         <h2 className="text-lg font-semibold">Coverage</h2>
         <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <MonitoredUsersTile />
+          <SectionErrorBoundary label="Monitored users">
+            <MonitoredUsersTile />
+          </SectionErrorBoundary>
           <BackendPendingState
             taskRef="F0.13"
             description="Analyzed sessions -- no session concept exists anywhere in this repo; fabricating session boundaries was deliberately avoided (tasks.md F14.3, same reasoning as F10.9)."
           />
-          <ProcessedLogsTile />
+          <SectionErrorBoundary label="Processed logs">
+            <ProcessedLogsTile />
+          </SectionErrorBoundary>
         </div>
       </div>
 
@@ -67,7 +80,9 @@ export function Component() {
           action) -- not time-to-detection, which is measured elsewhere as inference latency.
         </p>
         <div className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <AverageResponseTimeTile />
+          <SectionErrorBoundary label="Average response time">
+            <AverageResponseTimeTile />
+          </SectionErrorBoundary>
         </div>
       </div>
     </section>
