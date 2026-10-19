@@ -12,6 +12,7 @@ persisted to Neo4j/Redis/Postgres.
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from functools import lru_cache
@@ -32,6 +33,8 @@ from t_gnn.motifs import MotifRegistry
 from t_gnn.protocol_registry import ProtocolDecayRegistry
 
 T = TypeVar("T")
+
+logger = logging.getLogger("t_gnn.api")
 
 
 def audit_log_path() -> Path:
@@ -131,17 +134,39 @@ def get_writer() -> ApiStateWriter:
     return ApiStateWriter(get_connection)
 
 
+def describe_pg_error(exc: psycopg2.Error) -> str:
+    """One line naming the error class/SQLSTATE plus Postgres's own message
+    -- what an operator needs to tell "can't connect" from "table missing"."""
+    message = str(exc).strip().splitlines()[0] if str(exc).strip() else "(no message)"
+    code = f" [{exc.pgcode}]" if getattr(exc, "pgcode", None) else ""
+    return f"{type(exc).__name__}{code}: {message}"
+
+
 def require_postgres(fn: Callable[[], T]) -> T:
-    """Runs a Postgres-backed read/write and converts a connectivity
-    failure into a clean 503 rather than a 500 -- callers still get a
-    typed, documented failure mode instead of the API process crashing,
-    matching this repo's general graceful-degradation posture (tasks.md
-    6.3's Redis-outage handling, `ApiStateWriter.available`'s own
-    catch-and-flag behavior for writes)."""
+    """Runs a Postgres-backed read/write, mapping failures to typed HTTP
+    errors instead of crashing the request, matching this repo's general
+    graceful-degradation posture (tasks.md 6.3's Redis-outage handling,
+    `ApiStateWriter.available`'s catch-and-flag behavior for writes).
+
+    Two different failures, two different answers -- previously both were a
+    503 "Postgres unavailable", which hid e.g. a missing table behind what
+    looked like an outage, and nothing reached the server log:
+      - connection-level (`OperationalError`/`InterfaceError`: server down,
+        bad credentials, connection dropped) -> 503, logged as a warning;
+      - anything else (missing table/column, bad query) -> 500 with the
+        real error, logged with a traceback -- a bug or schema problem, not
+        an outage.
+    """
     try:
         return fn()
+    except (psycopg2.OperationalError, psycopg2.InterfaceError) as exc:
+        detail = describe_pg_error(exc)
+        logger.warning("Postgres unavailable: %s", detail)
+        raise HTTPException(status_code=503, detail=f"Postgres unavailable: {detail}") from exc
     except psycopg2.Error as exc:
-        raise HTTPException(status_code=503, detail=f"Postgres unavailable: {exc}") from exc
+        detail = describe_pg_error(exc)
+        logger.exception("Postgres query failed: %s", detail)
+        raise HTTPException(status_code=500, detail=f"Postgres query failed: {detail}") from exc
 
 
 def _neo4j_reachable(config: Neo4jConfig) -> bool:
@@ -176,14 +201,27 @@ def get_forensics_api() -> Neo4jForensicQueryAPI:
     return _forensics_api
 
 
+_last_postgres_health_error: Optional[str] = None
+
+
 def postgres_reachable() -> bool:
+    """Logged only when the failure *changes* (health is polled every ~15s,
+    so logging every failed probe would flood the console)."""
+    global _last_postgres_health_error
     try:
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1")
-        return True
-    except psycopg2.Error:
+    except psycopg2.Error as exc:
+        detail = describe_pg_error(exc)
+        if detail != _last_postgres_health_error:
+            logger.warning("health: Postgres unreachable: %s", detail)
+            _last_postgres_health_error = detail
         return False
+    if _last_postgres_health_error is not None:
+        logger.info("health: Postgres reachable again")
+        _last_postgres_health_error = None
+    return True
 
 
 def redis_reachable() -> bool:

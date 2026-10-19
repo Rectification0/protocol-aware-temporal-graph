@@ -33,7 +33,14 @@ import psycopg2
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
-from t_gnn.api.deps import StreamConfig, audit_log_path, get_reader, get_stream_config
+from t_gnn.api.deps import (
+    StreamConfig,
+    audit_log_path,
+    describe_pg_error,
+    get_reader,
+    get_stream_config,
+    logger,
+)
 from t_gnn.api.schemas import AuditRecordOut, EntityScoreOut, MotifCompletionOut, MotifResetOut
 from t_gnn.api_state import ApiStateReader
 from t_gnn.audit import read_records
@@ -71,7 +78,14 @@ async def _poll_once(reader: ApiStateReader, audit_path: Path, cursors: dict) ->
             cursors["score_updated_at"] = max(cursors["score_updated_at"], su.updated_at)
             lines.append(_sse("inference_result", EntityScoreOut(**su.result.__dict__).model_dump()))
     except psycopg2.Error as exc:
-        lines.append(_sse("error", {"message": f"Postgres unavailable: {exc}"}))
+        detail = describe_pg_error(exc)
+        # Polled every second: log when the failure starts or changes, not per poll.
+        if cursors.get("pg_error") != detail:
+            logger.warning("stream: Postgres poll failed: %s", detail)
+            cursors["pg_error"] = detail
+        lines.append(_sse("error", {"message": f"Postgres unavailable: {detail}"}))
+    else:
+        cursors.pop("pg_error", None)
 
     prune_records = read_records(audit_path, since=cursors["prune_logged_at"], record_type="prune")
     for rec in reversed(prune_records):  # read_records is newest-first; emit oldest-first

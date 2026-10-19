@@ -9,6 +9,7 @@ before uvicorn starts.
 from __future__ import annotations
 
 import argparse
+import logging
 
 import uvicorn
 
@@ -19,6 +20,10 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--reload", action="store_true", help="auto-reload on source changes (local dev only)")
     args = parser.parse_args()
+
+    # Uvicorn only configures its own loggers, so without this the API's
+    # `t_gnn.*` warnings (e.g. the real reason behind a 503) never print.
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(name)s: %(message)s")
 
     uvicorn.run("t_gnn.api.app:app", host=args.host, port=args.port, reload=args.reload)
 

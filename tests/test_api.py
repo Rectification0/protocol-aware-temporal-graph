@@ -626,3 +626,40 @@ def test_cors_env_is_applied_to_preflight_responses(monkeypatch):
 
     denied = configured.options("/api/health", headers={"Origin": "http://localhost:5173", **preflight})
     assert "access-control-allow-origin" not in denied.headers
+
+
+# --- Postgres failure mapping: outage (503) vs query/schema error (500) ----
+
+import logging  # noqa: E402
+
+import psycopg2  # noqa: E402
+import psycopg2.errors  # noqa: E402
+
+
+def test_connection_failure_is_a_logged_503(client, fake_state, monkeypatch, caplog):
+    def boom():
+        raise psycopg2.OperationalError('connection to server at "localhost" failed: password authentication failed')
+
+    monkeypatch.setattr(fake_state, "latest_metrics_snapshot", boom)
+    with caplog.at_level(logging.WARNING, logger="t_gnn.api"):
+        response = client.get("/api/metrics/snapshot")
+
+    assert response.status_code == 503
+    assert "OperationalError" in response.json()["error"]["message"]
+    assert "password authentication failed" in response.json()["error"]["message"]
+    assert any("password authentication failed" in r.getMessage() for r in caplog.records)
+
+
+def test_query_error_is_a_500_with_the_real_message_not_an_outage(client, fake_state, monkeypatch, caplog):
+    def boom():
+        raise psycopg2.errors.UndefinedTable('relation "metrics_snapshots" does not exist')
+
+    monkeypatch.setattr(fake_state, "latest_metrics_snapshot", boom)
+    with caplog.at_level(logging.ERROR, logger="t_gnn.api"):
+        response = client.get("/api/metrics/snapshot")
+
+    assert response.status_code == 500
+    message = response.json()["error"]["message"]
+    assert message.startswith("Postgres query failed: UndefinedTable")
+    assert 'relation "metrics_snapshots" does not exist' in message
+    assert any(r.exc_info for r in caplog.records)  # traceback reaches the server log
