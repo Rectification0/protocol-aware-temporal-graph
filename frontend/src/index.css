@@ -11,17 +11,14 @@
 @custom-variant dark (&:is(.dark *));
 
 /* ---------------------------------------------------------------------
- * Design tokens (tasks.md Milestone F5)
+ * Design tokens (tasks.md Milestone F5; light theme added in F16.2)
  *
- * Dark-mode-only for now -- no light theme / toggle exists yet (tasks.md
- * doesn't ask for one in F5, and shipping an unverified light theme would
- * violate the same accessibility-first posture this token set is built
- * on). `.dark` is applied unconditionally on `<html>` (see index.html).
- * `:root` intentionally holds the *same* dark values (not shadcn's usual
- * light defaults) so the app still renders correctly even if that class
- * is ever missing -- a light theme is a real option for Milestone F15
- * (Settings) to add later without restructuring these variable names,
- * but that's a future decision, not a half-built one today.
+ * Two palettes over the same variable names: `:root` is light, `.dark`
+ * (on `<html>`) overrides it. Dark remains the default -- index.html
+ * ships `class="dark"`, and its inline pre-paint script swaps that for
+ * the persisted F15.1 preference (`themeStore.ts`) before first render, so
+ * a light-theme user never sees a dark flash. `useAppliedTheme()` keeps
+ * the class in sync on live toggles after that.
  *
  * Palette derivation: base neutrals are Tailwind's standard slate scale
  * (well-tested dark-dashboard convention, matches the ui-ux-pro-max
@@ -33,10 +30,66 @@
  * one shade darker (600/700) than the matching text-on-dark shade
  * (400/500) specifically so white button text also clears >=4.5:1 --
  * the same color is not reused for both roles.
+ *
+ * Light palette (F16.2) was held to the same bar, plus one check the
+ * tonal badge pattern (severity-badge.tsx: text on its own 15% tint)
+ * specifically needs: severity/status text clears >=4.5:1 against that
+ * tint composited over both --background and --card, which is why most
+ * of them sit at the 800 shade rather than the 700 that would pass
+ * against plain white alone. Chart series clear >=3:1 (WCAG 1.4.11
+ * non-text contrast) against both surfaces.
  * --------------------------------------------------------------------- */
-:root,
-.dark {
+:root {
+  color-scheme: light;
   --radius: 0.5rem;
+
+  --background: #f8fafc; /* slate-50 */
+  --foreground: #0f172a; /* slate-900 -- 17.1:1 */
+
+  --card: #ffffff;
+  --card-foreground: #0f172a;
+
+  --popover: #ffffff;
+  --popover-foreground: #0f172a;
+
+  --primary: #2563eb; /* blue-600 -- 5.2:1 under white text, 4.9:1 as text on bg */
+  --primary-foreground: #ffffff;
+
+  --secondary: #f1f5f9; /* slate-100 */
+  --secondary-foreground: #0f172a;
+
+  --muted: #f1f5f9;
+  --muted-foreground: #475569; /* slate-600 -- 7.2:1 bg, 6.9:1 on muted */
+
+  --accent: #f1f5f9;
+  --accent-foreground: #0f172a;
+
+  --destructive: #dc2626; /* red-600 -- 4.8:1 under white text */
+  --destructive-foreground: #ffffff;
+
+  --border: #e2e8f0; /* slate-200 -- structural only, see .dark's note */
+  --input: #cbd5e1; /* slate-300 */
+  --ring: #2563eb; /* blue-600, 4.9:1 vs --background */
+
+  --chart-1: #2563eb; /* blue-600 */
+  --chart-2: #0891b2; /* cyan-600 */
+  --chart-3: #d97706; /* amber-600 */
+  --chart-4: #7c3aed; /* violet-600 */
+  --chart-5: #e11d48; /* rose-600 */
+
+  --severity-critical: #b91c1c; /* red-700 -- 4.8:1 on its tint */
+  --severity-high: #9a3412; /* orange-800 -- 5.5:1 on its tint */
+  --severity-medium: #92400e; /* amber-800 -- 5.4:1 on its tint */
+  --severity-low: #155e75; /* cyan-800 -- 5.5:1 on its tint */
+  --severity-info: #475569; /* slate-600, same as muted-foreground */
+
+  --status-success: #065f46; /* emerald-800 */
+  --status-warning: #92400e; /* amber-800, same as severity-medium */
+  --status-error: #b91c1c; /* red-700, same as severity-critical */
+}
+
+.dark {
+  color-scheme: dark;
 
   --background: #020617; /* slate-950 */
   --foreground: #f8fafc; /* slate-50 */
@@ -152,7 +205,6 @@
 
   body {
     @apply bg-background text-foreground font-sans antialiased;
-    color-scheme: dark;
     font-synthesis: none;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;

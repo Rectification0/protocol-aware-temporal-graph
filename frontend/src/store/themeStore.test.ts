@@ -16,6 +16,7 @@ describe('themeStore', () => {
     expect(useThemeStore.getState().theme).toBe('light')
   })
 
+  // Also pins the key/shape index.html's pre-paint script reads (F16.2).
   it('persists changes to localStorage (F15.6)', () => {
     useThemeStore.getState().setTheme('light')
 

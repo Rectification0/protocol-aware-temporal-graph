@@ -19,7 +19,7 @@ that finished core.
 - F0.11 (`[~]`, partial) — real login/authorization; F0.12/F0.13/F0.14 (`[ ]`, `[BACKEND TODO]`) — cybersecurity-score formula, IP/device/session-history fields, geo data — all genuine data-model/product decisions blocking several frontend panels, not oversights.
 
 **Frontend (`frontend_implementation` branch)**
-- Milestone F16 — Quality, Accessibility & Testing (9 tasks: responsive pass, dark mode, a11y, unit/integration tests, perf, code-splitting/lazy-loading verification, error boundaries) — in progress (F16.9 error boundaries done).
+- Milestone F16 — Quality, Accessibility & Testing (9 tasks: responsive pass, dark mode, a11y, unit/integration tests, perf, code-splitting/lazy-loading verification, error boundaries) — in progress (F16.2 light/dark theming, F16.9 error boundaries done).
 - Milestone F17 — Deployment (5 tasks: production build pipeline, containerization, reverse-proxy/CORS, CI deploy job, docs) — not started.
 - Frontend Backlog FB.1 — editable alert-thresholds write path (F15.5's own explicitly-flagged follow-up) — blocked on a real backend config-write API + authorization model (F0.11).
 
@@ -348,7 +348,7 @@ Largely a second view over F6/F0.12's data at a different altitude (company-wide
 ### Milestone F16 — Quality, Accessibility & Testing
 
 - [ ] F16.1 Responsive design pass across all pages (mobile/tablet breakpoints for the dashboard grid, tables, charts). — Complexity: M — Depends on: F6-F14 substantially complete.
-- [ ] F16.2 Dark mode (design-token-driven, per F15.1). — Complexity: M — Depends on: F1.4.
+- [x] F16.2 Dark mode (design-token-driven, per F15.1). *(Dark already existed as the only palette (F5); what was missing was a real second theme for F15.1's toggle to switch to. `src/index.css` now splits into `:root` (new light palette, slate/Tailwind-scale like the dark one) and `.dark` (unchanged dark values), with `color-scheme` per theme. Contrast-checked the same way F5's dark tokens were (relative-luminance script): every text token >=4.5:1 vs both `--background` and `--card`; chart series >=3:1 (WCAG 1.4.11); and -- a check the tonal badge pattern specifically needs -- severity/status text >=4.5:1 against its own 15% tint composited over both surfaces, which pushed most of them to the 800 shade (700 fails at ~3.9-4.4:1). `index.html` gained an inline pre-paint script applying the persisted `t-gnn-theme` before React loads (no dark flash for light users; now applies on `/login` too), pinned against the store's real persisted shape by `src/store/themePrePaint.test.ts`. `ThemeSection`'s "no visual effect yet" caption removed.)* — Complexity: M — Depends on: F1.4.
 - [ ] F16.3 Accessibility pass (keyboard nav, ARIA labels on charts/tables/alerts, color-contrast check on severity badges (F5.14) since severity coloring can't be the only signal). — Complexity: M — Depends on: F5 components complete.
 - [ ] F16.4 Unit tests (components, hooks) — establish the frontend's test runner/convention now (nothing exists yet; don't retrofit at the end). — Complexity: M — Depends on: F1.1.
 - [ ] F16.5 Integration tests (page-level, mocking F4's API layer). — Complexity: M — Depends on: F16.4.

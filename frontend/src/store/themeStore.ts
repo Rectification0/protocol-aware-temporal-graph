@@ -7,16 +7,12 @@ import { persist } from 'zustand/middleware'
 // since there's no real token to persist), a display preference has
 // nothing sensitive about it.
 //
-// `src/index.css`'s own comment already anticipated this: today `:root`
-// and `.dark` hold the *same* verified dark values (no real light palette
-// exists -- shipping one without the same contrast verification the dark
-// tokens got would violate the accessibility-first posture that file
-// documents). So `setTheme('light')` is genuinely wired (`useAppliedTheme`
-// below really does flip the class) but currently a visual no-op -- the
-// honest state until Milestone F16.2 gives `:root` its own real light
-// values. This is deliberately the same "real mechanism, pending a
-// dependency" call F6.1's `CybersecurityScoreTile` already makes for a
-// backend gap, just for a frontend-milestone one instead.
+// F16.2: `src/index.css` gives `:root` a real, contrast-checked light
+// palette and `.dark` the original dark one, so `setTheme('light')` is a
+// genuine visual switch. index.html's inline pre-paint script reads this
+// store's persisted shape (`{ state: { theme } }` under `t-gnn-theme`)
+// directly, before React loads -- keep that key/shape in sync with it
+// (`themeStore.test.ts` pins it).
 
 export type Theme = 'dark' | 'light'
 
@@ -35,10 +31,9 @@ export const useThemeStore = create<ThemeStore>()(
   ),
 )
 
-/** Mounted once in `AppShell` -- keeps `<html>`'s `.dark` class (index.html's
- * static default) in sync with the stored preference. Scoped to the
- * authenticated app the same way F13.1's live-stream connection is; the
- * `/login` page keeps index.html's static default. */
+/** Mounted once in `AppShell` -- keeps `<html>`'s `.dark` class in sync with
+ * live preference changes. The initial class (on every page, `/login`
+ * included) is set earlier still, by index.html's pre-paint script. */
 export function useAppliedTheme() {
   const theme = useThemeStore((state) => state.theme)
 

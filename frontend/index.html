@@ -4,7 +4,18 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="dark light" />
+    <script>
+      // F16.2: apply the persisted theme (themeStore.ts, key `t-gnn-theme`)
+      // before first paint, so a light-theme user doesn't get a dark flash
+      // while the JS bundle loads. Any read/parse failure keeps the dark default.
+      try {
+        var stored = JSON.parse(localStorage.getItem('t-gnn-theme'))
+        if (stored && stored.state && stored.state.theme === 'light') {
+          document.documentElement.classList.remove('dark')
+        }
+      } catch (e) {}
+    </script>
     <title>T-GNN SOC Dashboard</title>
   </head>
   <body>

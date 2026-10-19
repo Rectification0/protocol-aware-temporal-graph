@@ -14,17 +14,17 @@ describe('ThemeSection', () => {
     useThemeStore.setState({ theme: 'dark' })
   })
 
-  it('shows the current theme with no pending-effect caption', () => {
+  it('shows the current theme', () => {
     render(<ThemeSection />)
 
     expect(screen.getByText('Dark')).toBeInTheDocument()
-    expect(screen.queryByText(/no visual effect yet/)).not.toBeInTheDocument()
   })
 
-  it('shows the honest no-op caption once the store is set to light', () => {
+  it('no longer captions light as a visual no-op (F16.2 shipped its palette)', () => {
     useThemeStore.setState({ theme: 'light' })
     render(<ThemeSection />)
 
-    expect(screen.getByText(/no visual effect yet/)).toBeInTheDocument()
+    expect(screen.getByText('Light')).toBeInTheDocument()
+    expect(screen.queryByText(/no visual effect/)).not.toBeInTheDocument()
   })
 })

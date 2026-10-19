@@ -294,9 +294,9 @@ second control. Three preferences persist across reloads (F15.6) via
 `zustand/middleware`'s `persist` (`localStorage`, keys prefixed `t-gnn-`):
 `src/store/themeStore.ts` (new -- `useAppliedTheme()`, mounted in
 `AppShell`, really does toggle `<html>`'s `.dark` class from the stored
-preference, though picking "Light" has no visible effect yet since
-`index.css`'s `:root`/`.dark` still share the same values pending
-Milestone F16.2's real light palette), `src/store/notificationSettingsStore.ts`
+preference; since Milestone F16.2, `index.css`'s `:root` holds a real,
+contrast-checked light palette and `.dark` the dark one, and `index.html`'s
+inline pre-paint script applies the stored choice before React loads), `src/store/notificationSettingsStore.ts`
 (new -- which severities reach the notification bell/toasts, consumed via
 `features/monitoring/logic.ts`'s `filterEnabledAlertEvents`; Milestone
 F13.5's Critical Alerts panel is a separate, fixed critical-only subset
