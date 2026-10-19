@@ -1,51 +1,30 @@
-import { render } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { CategoryBarChart, DonutChart, HeatmapChart, TimeSeriesChart } from './charts'
+import { CategoryBarChart, HeatmapChart } from './charts'
 
-const timeSeriesData = [
-  { t: '00:00', motifs: 2, anomalies: 1 },
-  { t: '01:00', motifs: 4, anomalies: 3 },
-]
-
-const barData = [
-  { machine: 'Machine:C1042', count: 12 },
-  { machine: 'Machine:C1043', count: 30 },
-]
-
-const donutData = [
-  { name: 'lateral_pivot', value: 8 },
-  { name: 'admin_share_escalation', value: 3 },
-]
-
-describe('chart wrappers', () => {
-  it('TimeSeriesChart renders without throwing', () => {
+// The Recharts-backed charts themselves are unit-tested in
+// recharts-charts.test.tsx; this covers the F16.8 lazy facade.
+describe('chart facade', () => {
+  it('shows a same-height skeleton, then the lazily loaded chart', async () => {
     const { container } = render(
-      <TimeSeriesChart
-        data={timeSeriesData}
-        xKey="t"
-        series={[
-          { key: 'motifs', label: 'Motif completions' },
-          { key: 'anomalies', label: 'Anomalies' },
-        ]}
+      <CategoryBarChart
+        data={[{ machine: 'Machine:C1', count: 3 }]}
+        categoryKey="machine"
+        valueKey="count"
+        label="Detections"
+        height={200}
       />,
     )
-    expect(container.querySelector('[data-chart]')).toBeTruthy()
+
+    expect(container.querySelector('.animate-pulse')).toHaveStyle({ height: '200px' })
+    expect(container.querySelector('[data-chart]')).toBeNull()
+
+    await waitFor(() => expect(container.querySelector('[data-chart]')).toBeTruthy())
+    expect(container.querySelector('.animate-pulse')).toBeNull()
   })
 
-  it('CategoryBarChart renders without throwing', () => {
-    const { container } = render(
-      <CategoryBarChart data={barData} categoryKey="machine" valueKey="count" label="Detections" />,
-    )
-    expect(container.querySelector('[data-chart]')).toBeTruthy()
-  })
-
-  it('DonutChart renders without throwing', () => {
-    const { container } = render(<DonutChart data={donutData} nameKey="name" valueKey="value" />)
-    expect(container.querySelector('[data-chart]')).toBeTruthy()
-  })
-
-  it('HeatmapChart renders a cell per row/column with an accessible label', () => {
-    const { getByLabelText } = render(
+  it('HeatmapChart renders eagerly (no Recharts) with an accessible label per cell', () => {
+    render(
       <HeatmapChart
         rowLabels={['Mon', 'Tue']}
         columnLabels={['00', '01']}
@@ -55,7 +34,7 @@ describe('chart wrappers', () => {
         ]}
       />,
     )
-    expect(getByLabelText('Mon, 00: 1')).toBeInTheDocument()
-    expect(getByLabelText('Tue, 01: 4')).toBeInTheDocument()
+    expect(screen.getByLabelText('Mon, 00: 1')).toBeInTheDocument()
+    expect(screen.getByLabelText('Tue, 01: 4')).toBeInTheDocument()
   })
 })

@@ -1,3 +1,5 @@
+import { DeferUntilVisible } from '@/components/defer-until-visible'
+import { ChartSkeleton } from '@/components/skeletons'
 import { TimeRangeFilter } from '@/components/time-range-filter'
 import { SectionErrorBoundary } from '@/components/section-error-boundary'
 import { AttackFrequencyHeatmap } from '@/features/analytics/AttackFrequencyHeatmap'
@@ -33,6 +35,16 @@ import { UserThreatCountsPanel } from '@/features/analytics/UserThreatCountsPane
 // applied to `ThreatTrendsChart`'s own `attacks` series rather than a
 // second, near-duplicate day-bucketed chart -- see tasks.md's F12.1/
 // F12.2/F12.4 lines for the full reasoning.
+function VisualizationsPlaceholder() {
+  return (
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      {Array.from({ length: 4 }, (_, i) => (
+        <ChartSkeleton key={i} height={340} />
+      ))}
+    </div>
+  )
+}
+
 export function Component() {
   return (
     <section className="space-y-4">
@@ -77,25 +89,29 @@ export function Component() {
       </div>
 
       <h2 className="text-lg font-semibold">Visualizations</h2>
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <SectionErrorBoundary label="Detection accuracy">
-          <DetectionAccuracyChart />
-        </SectionErrorBoundary>
-        <SectionErrorBoundary label="Geographic attack map">
-          <GeographicAttackMapCard />
-        </SectionErrorBoundary>
-        <SectionErrorBoundary label="Attack frequency heatmap">
-          <AttackFrequencyHeatmap />
-        </SectionErrorBoundary>
-        <SectionErrorBoundary label="Top targeted resources">
-          <TopTargetedResourcesChart />
-        </SectionErrorBoundary>
-        <div className="lg:col-span-2">
-          <SectionErrorBoundary label="Attack patterns">
-            <AttackPatternsChart />
+      {/* F16.8: below the fold on most screens -- these five panels (and
+          their queries) mount only as the section scrolls into view. */}
+      <DeferUntilVisible placeholder={<VisualizationsPlaceholder />}>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <SectionErrorBoundary label="Detection accuracy">
+            <DetectionAccuracyChart />
           </SectionErrorBoundary>
+          <SectionErrorBoundary label="Geographic attack map">
+            <GeographicAttackMapCard />
+          </SectionErrorBoundary>
+          <SectionErrorBoundary label="Attack frequency heatmap">
+            <AttackFrequencyHeatmap />
+          </SectionErrorBoundary>
+          <SectionErrorBoundary label="Top targeted resources">
+            <TopTargetedResourcesChart />
+          </SectionErrorBoundary>
+          <div className="lg:col-span-2">
+            <SectionErrorBoundary label="Attack patterns">
+              <AttackPatternsChart />
+            </SectionErrorBoundary>
+          </div>
         </div>
-      </div>
+      </DeferUntilVisible>
     </section>
   )
 }
