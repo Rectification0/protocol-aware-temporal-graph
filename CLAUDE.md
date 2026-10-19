@@ -16,7 +16,7 @@ the source of truth and should be read before implementing any new phase:
 
 ### Backend status (`main`)
 
-Every phase in `tasks.md` (0–8) has code; further backend work is enhancement/extension
+Phases 0–8 in `tasks.md` have code (Phase 9, ML training, is planned and not started); further backend work is enhancement/extension
 (remaining Backlog items, Open Questions), not a new phase.
 
 | Phase | Status |
@@ -30,6 +30,7 @@ Every phase in `tasks.md` (0–8) has code; further backend work is enhancement/
 | 6 Observability/Hardening | `MetricsCollector`/`AuditLogger` are framework-agnostic aggregators (no dashboard/log-shipping pipeline exists yet); `MotifEngine` hardening (6.3) and `BufferedColdStorageWriter` (6.4) are real, load-bearing. |
 | 7 Docs/Rollout | `docs/configuration-reference.md`/`operational-runbook.md` are real, complete. `pilot.py` (7.3) is a real, tested harness — but running it against real labeled traffic for a go/no-go call is an operational step this repo can't perform itself (same gap as task 0.4's dataset acquisition). |
 | 8 Tooling follow-ups | `score_entities.py` CLI + a PowerShell doc fix, both real, discovered as gaps while using Phase 7's CLIs. |
+| 9 Machine learning | **Not started** (added 2026-10-19). Train and evaluate the untrained `DynamicTGNN`: problem definition (9.1, needs developer sign-off first), leakage-safe dataset, non-ML baselines it must beat, training, T-GNN evaluation in `pilot.py`, checkpoint loading, calibrated thresholds. Specs.md §4 rules out *replacing the architecture*, not training it; 9.14 (a new architecture) is gated on that. |
 
 **Backlog:** B.3 (`adaptive_calibration.py`), B.4 (fuzzy motif matching), B.5 (sharding), B.6 (`feedback.py`) are real, tested extensions — see Architecture. B.1/B.2 (a real Flink job) are deliberately unattempted: PyFlink for this stack's Flink 1.18 only supports Python 3.8–3.10 against this env's Python 3.12, and there's no message broker in `docker-compose.yml`. B.7 (real enterprise-scale NFR validation) is an operational gap like 0.4/7.3 (though `tests/test_load.py` has two opt-in proxy benchmarks via `RUN_HEAVY_LOAD_TEST=1`). B.8 (Mordor/OTRF ingestion adapter) is implemented and tested but deliberately kept off `main`, on `feature/mordor-ingestion`.
 

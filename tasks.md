@@ -18,6 +18,9 @@ that finished core.
 - Backlog B.8 — Mordor/OTRF ingestion adapter — implemented and tested, deliberately kept off `main` on `feature/mordor-ingestion` per developer instruction.
 - F0.11 (`[~]`, partial) — real login/authorization; F0.12/F0.13/F0.14 (`[ ]`, `[BACKEND TODO]`) — cybersecurity-score formula, IP/device/session-history fields, geo data — all genuine data-model/product decisions blocking several frontend panels, not oversights.
 
+**Machine learning (Phase 9, added 2026-10-19)**
+- Phase 9 — train and evaluate the currently-untrained T-GNN (15 tasks): problem definition, a leakage-safe labeled dataset, non-ML baselines to beat, training, T-GNN evaluation in `pilot.py`, checkpoint loading in the live pipeline, calibrated thresholds, and a model card — not started. 9.1 (the problem definition, needing developer sign-off) blocks the rest; 9.14 (a different architecture) is gated on specs.md §4.
+
 **Frontend (`frontend_implementation` branch)**
 - Milestone F16 — Quality, Accessibility & Testing (9 tasks: responsive pass, dark mode, a11y, unit/integration tests, perf, code-splitting/lazy-loading verification, error boundaries) — in progress (F16.2 light/dark theming, F16.4 unit tests, F16.5 integration tests, F16.6 live-path performance, F16.7 bundle-split check, F16.8 lazy charts/sections, F16.9 error boundaries done).
 - Milestone F17 — Deployment (5 tasks: production build pipeline, containerization, reverse-proxy/CORS, CI deploy job, docs) — **complete** (see `docs/deployment.md`).
@@ -102,6 +105,66 @@ that finished core.
 
 - [x] 8.1 Build a CLI/script that drives staged or simulated edges through the actual live T-GNN model (`src/t_gnn/tgnn.py`'s `DynamicTGNN`/`TGNNInferenceEngine`, Phase 5) and prints per-entity inference scores. *(src/t_gnn/score_entities.py `score_staged_edges()` + `python -m t_gnn.score_entities` CLI -- closes the gap that `src/t_gnn/pilot.py` (7.3) evaluates only the decay/baseline-deviation path (FR1.5) and the motif-completion path (FR3.4) against labeled ground truth without ever invoking the PyTorch Geometric forward pass design.md §2.8 describes. Reuses Phase 5's pieces as-is -- no engine/model changes: staged edges (`stage_lanl.py` or `simulate_traffic.py` output) are replayed through a real `DecayStreamProcessor` (1.3-1.5) and `MotifEngine` (3.2-3.5) to populate live state in an `ActiveGraphStore` (2.1), with `TGNNInferenceEngine` wired to the same `MotifAlertBus` so motif completions during replay drive the 5.3 fast path exactly as design.md's data flow (§3, steps 5-7) describes, before a final scheduled pass (5.1/5.2) scores every entity left in the graph, sorted by score magnitude. Per specs.md §4's non-goal, this surfaces the existing untrained reference model's output -- it does not change or train the model itself.)*
 - [x] 8.2 Fix PowerShell-incompatible bash-style line-continuation (`\`) in `docs/operational-runbook.md` and this file's — CLAUDE.md's — Commands section for the `simulate_traffic`/`pilot` invocations. *(Root-caused during local CLI verification: Windows PowerShell doesn't accept `\` for line continuation, which produced a misleading "module not found"/argparse-looking error that was actually a shell-syntax problem, not an install/import problem. Replaced the multi-line bash-style examples with PowerShell-safe backtick-continued forms in both docs so the same trap doesn't recur for other commands.)*
+
+## Phase 9 — Machine Learning: Train & Evaluate the T-GNN
+
+Added 2026-10-19 at the developer's request, to make this a real ML project. Today `src/t_gnn/tgnn.py`'s `DynamicTGNN` (two `SAGEConv` layers + a linear score head) runs live but is **untrained**: its weights are random, so the scores the dashboard shows carry no learned signal. Detection actually comes from the EWMA z-score baseline (FR1.4/1.5) and rule-based motif matching (FR3). This phase adds what's missing: a learning problem, a labeled dataset, training, honest evaluation against non-ML baselines, and checkpoint loading in the live pipeline.
+
+Scope note: specs.md §4's non-goal is *replacing the T-GNN architecture*, not training it. Every task here trains and evaluates the existing `DynamicTGNN` shape (inputs and feature set may change; the architecture doesn't), except 9.14, which is gated on an explicit developer decision.
+
+**Problem definition & data**
+- [ ] 9.1 Write `docs/ml-design.md` and get developer sign-off on the learning problem before any code. It needs to settle:
+  - the unit of prediction: an entity within a time window, or an edge;
+  - the label: how a LANL `redteam.txt` / `RedTeamLabel` event maps to positive (entity, window) pairs within `pilot.py`'s time tolerance, and how negatives are sampled;
+  - supervised vs. self-supervised (e.g. link prediction / reconstruction error), given that real attack labels are extremely scarce (LANL has under a thousand red-team events in 58 days) and heavily imbalanced;
+  - the success metric (PR-AUC and precision at a fixed alert budget, not accuracy, since a 99.9%-negative dataset makes accuracy meaningless);
+  - the decision gate for this phase: what result counts as "the model earns its place in the pipeline". — Complexity: M — Depends on: none.
+- [ ] 9.2 Training data sources, each with its limits stated plainly:
+  - **(a) Synthetic at scale:** `data/simulate_traffic.py` with configurable attack mix and density. Labeled by construction, but a model can learn the generator's artifacts rather than attacks.
+  - **(b) The full LANL dataset:** the same acquisition gap as task 0.4; only a tiny vendored sample exists today.
+  - **(c) Mordor/OTRF captures (B.8):** real attack techniques, small. Decide whether to merge `feature/mordor-ingestion` for this.
+
+  No result trained only on (a) may be reported as real-world performance. — Complexity: M (S for (a)) — Depends on: 9.1.
+- [ ] 9.3 Labeled dataset builder, `src/t_gnn/ml/dataset.py`. Replays staged edges in time order through the real `DecayStreamProcessor` + `ActiveGraphStore` (so training sees exactly what live inference sees: decay, pruning, baselines), snapshots the graph every Δt, and emits PyG `Data` objects with node features plus labels joined from `RedTeamLabel`s. **Leakage control is the point of this task:** a snapshot at time t may only contain edges with `t_e <= t`; splits are by time (train → validation → test, in order), never random; and baseline/feature state must not be fitted on validation/test periods. — Complexity: L — Depends on: 9.1, 9.2.
+- [ ] 9.4 Feature set. Today a node's input is a learned per-id embedding (`EntityFeatureTable`) plus the latest z-score. That embedding is **transductive**: it can't say anything about an entity first seen after training, which is exactly when lateral movement shows up. Evaluate inductive features computed from existing components: in/out degree, per-protocol decayed-weight sums, time since last seen, z-scores per protocol, and partial-motif state count (Redis). Decide whether to keep, drop or regularize the id embedding. Version the feature schema, since 9.9 depends on it. — Complexity: M — Depends on: 9.3.
+
+**Training & evaluation**
+- [ ] 9.5 Baselines first: z-score threshold alone (`pilot.py`'s existing anomaly path), motif matching alone, and a non-graph model (logistic regression and/or isolation forest) on the same 9.4 features. The T-GNN must beat these on 9.1's metric to justify its cost; if it doesn't, that's a finding to report, not a reason to keep tuning until it does. — Complexity: M — Depends on: 9.4.
+- [ ] 9.6 Training CLI, `src/t_gnn/ml/train.py` / `python -m t_gnn.ml.train`:
+  - class-weighted BCE or focal loss for the imbalance;
+  - the temporal split from 9.3;
+  - early stopping on validation PR-AUC;
+  - fixed seeds and deterministic flags;
+  - CPU-only by default.
+
+  It writes a checkpoint plus metadata: feature-schema version, git commit, training-data hash, hyperparameters, metrics. Checkpoints go to `models/`, gitignored, because model binaries don't belong in git. — Complexity: L — Depends on: 9.3, 9.4.
+- [ ] 9.7 Extend `pilot.py` to evaluate the T-GNN path. Today it evaluates only the z-score and motif paths, never model scores (Phase 8 noted this gap). Report the following, all in the same JSON report:
+  - PR-AUC and ROC-AUC;
+  - precision@k and recall at a fixed alert budget;
+  - a per-attack-type breakdown (lateral_pivot, admin_share_escalation, low_and_slow);
+  - the baselines from 9.5 side by side.
+
+  The dashboard's Detection Accuracy chart (F12.3) gains a third "T-GNN" path from this report. — Complexity: M — Depends on: 9.5, 9.6.
+- [ ] 9.8 Hyperparameter search over hidden size, learning rate, snapshot Δt, neighbor depth, and loss weighting, selected on validation only. The test split is touched exactly once, for the final reported number. Log every run (9.11). — Complexity: M — Depends on: 9.6, 9.7.
+
+**Deployment into the live pipeline**
+- [ ] 9.9 Load trained weights in `TGNNInferenceEngine`. Add `--model-path` to `run_pipeline.py` / `score_entities.py`; refuse a checkpoint whose feature-schema version doesn't match; with no checkpoint, keep today's behavior but log loudly that the model is untrained. Every `InferenceResult` carries a `model_version`; `/api/health` and the dashboard show which model is live, or "untrained". — Complexity: M — Depends on: 9.6.
+- [ ] 9.10 Calibrate thresholds on validation data. Replace the provisional tier thresholds (`SECURITY_LEVEL_THRESHOLDS` / F7.1's suspicious/malicious cut-offs, currently illustrative magic numbers) with thresholds chosen on the validation split, e.g. Platt/isotonic calibration to a probability with tiers set at an alert budget, stored in config rather than code. The frontend's "provisional" captions then change to state which model version and validation run the thresholds came from. — Complexity: M — Depends on: 9.7, 9.9.
+
+**Quality & reproducibility**
+- [ ] 9.11 Experiment tracking and runbook. Use a lightweight per-run JSON log (config, data hash, metrics, checkpoint path); MLflow is optional, not required. Write `docs/ml-runbook.md`: how to build a dataset, train, evaluate, and promote a checkpoint to the live pipeline. — Complexity: S — Depends on: 9.6.
+- [ ] 9.12 Tests:
+  - **Dataset leakage:** no edge after the snapshot time, split boundaries respected, baseline state not fitted on later periods.
+  - **Training smoke test** on a tiny synthetic set: loss decreases, and it beats a random scorer.
+  - **Checkpoint round-trip:** save, load, identical scores.
+  - **Schema check:** the inference engine refuses a mismatched schema.
+
+  All CPU-only and fast enough for the default `pytest` run, with any heavy run opt-in like `RUN_HEAVY_LOAD_TEST`. — Complexity: M — Depends on: 9.3, 9.6, 9.9.
+- [ ] 9.13 Model card in `docs/model-card.md`: training data and provenance (synthetic vs. real), evaluation results with their exact datasets, known failure modes (unseen entities, low-and-slow attacks below the snapshot resolution, generator artifacts), intended use (ranking for analyst triage, not autonomous blocking — SOAR is a specs.md §4 non-goal), and what would invalidate it (drift, new protocols). — Complexity: S — Depends on: 9.7.
+
+**Gated / stretch**
+- [ ] 9.14 *(Gated: needs an explicit developer decision, since it crosses specs.md §4's "replacing the T-GNN architecture" non-goal.)* If 9.5/9.7 show the two-layer GraphSAGE model can't beat the baselines, evaluate a temporal architecture such as TGN-style node memory or TGAT-style time encoding with attention. Only after 9.1–9.8 exist, so the comparison is fair. — Complexity: L — Depends on: 9.7, developer sign-off.
+- [ ] 9.15 Drift monitoring and a retraining loop. Track the live score distribution against the training distribution, define a retraining cadence, and consider analyst dispositions (`motif_feedback` TP/FP, alert acks) as weak labels. Account for their bias: analysts only label what the system already surfaced, so naive use teaches the model its own blind spots. — Complexity: L — Depends on: 9.9, 9.10.
 
 ## Backlog — Actionable Extensions (tracked, ready to pick up)
 
