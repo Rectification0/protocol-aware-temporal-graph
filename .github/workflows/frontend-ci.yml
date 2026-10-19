@@ -108,7 +108,7 @@ jobs:
             ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
             ${{ env.FRONTEND_IMAGE }}:${{ github.ref_name }}
           cache-from: type=gha,scope=frontend
-          cache-to: type=gha,mode=max,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend,ignore-error=true
 
       # Runs the real image standalone (no API -- /api would 502, which is
       # the point: nginx must still start): config renders, runtime config
@@ -131,12 +131,17 @@ jobs:
         with:
           context: .
           file: docker/api.Dockerfile
+          # ignore-error on cache-to (both images): exporting the layer cache
+          # is an optimization, but the GHA cache service intermittently
+          # fails large layers (the CPU-torch one) with "error writing layer
+          # blob: not_found" -- seen 2026-10-19 on an image that had built
+          # fine. A missed cache write should only slow the next build.
           load: true
           tags: |
             ${{ env.API_IMAGE }}:${{ github.sha }}
             ${{ env.API_IMAGE }}:${{ github.ref_name }}
           cache-from: type=gha,scope=api
-          cache-to: type=gha,mode=max,scope=api
+          cache-to: type=gha,mode=max,scope=api,ignore-error=true
 
       - name: Push images
         if: github.event_name == 'push'
