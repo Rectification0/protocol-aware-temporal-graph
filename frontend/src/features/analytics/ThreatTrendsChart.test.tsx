@@ -104,4 +104,38 @@ describe('ThreatTrendsChart', () => {
     )
     expect(listEntityScores).toHaveBeenCalledWith(expect.objectContaining({ start: 111, end: 222 }))
   })
+
+  it('leads with the exact range total and its change vs the previous period', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    vi.mocked(listMotifCompletions).mockImplementation(async ({ limit } = {}) =>
+      limit === 1
+        ? // the previous-period count-only query
+          { items: [], limit: 1, offset: 0, total: 4 }
+        : {
+            items: [
+              {
+                id: 1,
+                motif_name: 'lateral_pivot',
+                chain_key: 'Machine:C1',
+                matched_edges: ['e1'],
+                completed_at: now,
+                confidence: 1,
+              },
+            ],
+            limit: 500,
+            offset: 0,
+            // exact backend count, larger than the sample actually returned
+            total: 6,
+          },
+    )
+    vi.mocked(listEntityScores).mockResolvedValue({ items: [], limit: 500, offset: 0, total: 0 })
+
+    render(<ThreatTrendsChart />, { wrapper })
+
+    expect(await screen.findByText('6')).toBeInTheDocument()
+    expect(screen.getByText('attacks')).toBeInTheDocument()
+    // More attacks is bad news.
+    expect(await screen.findByText('+50% vs previous period')).toHaveClass('text-status-error')
+    expect(screen.getByText(/chart drawn from the most recent 1/)).toBeInTheDocument()
+  })
 })

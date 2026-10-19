@@ -83,9 +83,23 @@ export function DonutChart<T extends AnyRecord>(props: DonutChartProps<T>) {
 
 // --- Heatmap (e.g. F12.6's time-of-day x day-of-week attack frequency) -----
 //
-// No Recharts primitive for this -- a plain CSS grid with an intensity
-// scale is the standard approach. Value is always exposed via `title`
-// (native tooltip) and visible on focus, per "don't rely on color alone".
+// No Recharts primitive for this -- a plain CSS grid. Magnitude is a
+// *binned* single-hue scale (`--heat-1..4`, validated as an ordinal ramp in
+// both modes; empty cells use `--muted`) rather than a continuous blend, so
+// low counts stay visible and adjacent bins stay distinguishable. A scale
+// legend says what the steps mean, the busiest cell is ringed, and every
+// value is exposed via `title`/`aria-label` -- never color alone.
+
+const HEAT_BINS = 4
+
+function heatStep(value: number, max: number): number {
+  if (value <= 0 || max <= 0) return 0
+  return Math.min(HEAT_BINS, Math.ceil((value / max) * HEAT_BINS))
+}
+
+function heatColor(step: number): string {
+  return step === 0 ? 'var(--muted)' : `var(--heat-${step})`
+}
 
 export interface HeatmapChartProps {
   rowLabels: string[]
@@ -103,53 +117,98 @@ export function HeatmapChart({
   valueFormatter = (v) => String(v),
   className,
 }: HeatmapChartProps) {
-  const max = Math.max(1, ...values.flat())
+  const max = Math.max(0, ...values.flat())
+  let peak: { row: number; column: number } | null = null
+  values.forEach((row, r) =>
+    row.forEach((value, c) => {
+      if (value > 0 && (peak === null || value > (values[peak.row]?.[peak.column] ?? 0))) {
+        peak = { row: r, column: c }
+      }
+    }),
+  )
+  const peakCell = peak as { row: number; column: number } | null
+
+  // Bin boundaries for the legend, e.g. max 8 -> 1-2, 3-4, 5-6, 7-8.
+  const binLabels = Array.from({ length: HEAT_BINS }, (_, i) => {
+    const low = Math.floor((i / HEAT_BINS) * max) + 1
+    const high = Math.ceil(((i + 1) / HEAT_BINS) * max)
+    return low >= high ? valueFormatter(high) : `${valueFormatter(low)}–${valueFormatter(high)}`
+  })
 
   return (
-    <div className={cn('overflow-x-auto', className)}>
-      <table className="border-separate border-spacing-1">
-        <thead>
-          <tr>
-            <th aria-hidden="true" />
-            {columnLabels.map((label) => (
-              <th
-                key={label}
-                scope="col"
-                className="px-1 text-xs font-normal text-muted-foreground"
-              >
-                {label}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rowLabels.map((rowLabel, rowIndex) => (
-            <tr key={rowLabel}>
-              <th scope="row" className="pr-2 text-right text-xs font-normal text-muted-foreground">
-                {rowLabel}
-              </th>
-              {columnLabels.map((columnLabel, columnIndex) => {
-                const value = values[rowIndex]?.[columnIndex] ?? 0
-                const intensity = value / max
-
-                return (
-                  <td key={columnLabel}>
-                    <div
-                      role="img"
-                      aria-label={`${rowLabel}, ${columnLabel}: ${valueFormatter(value)}`}
-                      title={`${rowLabel}, ${columnLabel}: ${valueFormatter(value)}`}
-                      className="size-6 rounded-sm"
-                      style={{
-                        backgroundColor: `color-mix(in srgb, var(--chart-1) ${Math.round(intensity * 100)}%, var(--card))`,
-                      }}
-                    />
-                  </td>
-                )
-              })}
+    <div className={cn('space-y-3', className)}>
+      <div className="overflow-x-auto">
+        <table className="border-separate border-spacing-[2px]">
+          <thead>
+            <tr>
+              <th aria-hidden="true" />
+              {columnLabels.map((label, index) => (
+                <th
+                  key={label}
+                  scope="col"
+                  className="px-0.5 text-[10px] font-normal text-muted-foreground"
+                >
+                  {/* Every third hour -- all 24 labels crowd into noise. */}
+                  {index % 3 === 0 ? label : <span className="sr-only">{label}</span>}
+                </th>
+              ))}
             </tr>
+          </thead>
+          <tbody>
+            {rowLabels.map((rowLabel, rowIndex) => (
+              <tr key={rowLabel}>
+                <th
+                  scope="row"
+                  className="pr-2 text-right text-xs font-normal text-muted-foreground"
+                >
+                  {rowLabel}
+                </th>
+                {columnLabels.map((columnLabel, columnIndex) => {
+                  const value = values[rowIndex]?.[columnIndex] ?? 0
+                  const isPeak = peakCell?.row === rowIndex && peakCell?.column === columnIndex
+                  const text = `${rowLabel}, ${columnLabel}: ${valueFormatter(value)}${isPeak ? ' (busiest)' : ''}`
+                  return (
+                    <td key={columnLabel} className="p-0">
+                      <div
+                        role="img"
+                        aria-label={text}
+                        title={text}
+                        data-peak={isPeak || undefined}
+                        className={cn(
+                          'size-5 rounded-[3px] transition-transform duration-150 hover:scale-125 sm:size-6',
+                          isPeak && 'ring-2 ring-foreground ring-offset-1 ring-offset-card',
+                        )}
+                        style={{ backgroundColor: heatColor(heatStep(value, max)) }}
+                      />
+                    </td>
+                  )
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {max > 0 && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          <span className="inline-flex items-center gap-1.5">
+            <span className="size-3 rounded-[3px]" style={{ backgroundColor: heatColor(0) }} />
+            none
+          </span>
+          {binLabels.map((label, i) => (
+            <span key={label + i} className="inline-flex items-center gap-1.5">
+              <span
+                className="size-3 rounded-[3px]"
+                style={{ backgroundColor: heatColor(i + 1) }}
+              />
+              {label}
+            </span>
           ))}
-        </tbody>
-      </table>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="size-3 rounded-[3px] ring-2 ring-foreground ring-offset-1 ring-offset-card" />
+            busiest
+          </span>
+        </div>
+      )}
     </div>
   )
 }

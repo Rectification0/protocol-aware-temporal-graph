@@ -327,6 +327,15 @@ retrofitted with `persist` in this pass -- previously in-memory only).
   memoized rows. `npm run check:bundle` guards the initial-load budget.
   Recharts loads lazily through `@/components/charts`. Below-the-fold
   sections use `DeferUntilVisible`.
+- **Charts.** Every analytics chart sits in a `ChartCard`. It leads with a
+  headline number, adds a delta vs the previous period where the data is
+  append-only, captions the source, and toggles to a table view. Trends are
+  gradient areas with an average line and a peak marker. Tooltips lead with
+  the value and show its share of the total. The donut carries its total and
+  a count/percent legend. The heatmap uses a binned scale with a legend and
+  rings the busiest cell. The palette and heatmap ramp were validated with
+  the dataviz skill's checker in both themes, and motion follows
+  `prefers-reduced-motion`.
 
 ## Deployment (Milestone F17)
 

@@ -35,6 +35,29 @@ describe('chart facade', () => {
       />,
     )
     expect(screen.getByLabelText('Mon, 00: 1')).toBeInTheDocument()
-    expect(screen.getByLabelText('Tue, 01: 4')).toBeInTheDocument()
+    expect(screen.getByLabelText('Tue, 01: 4 (busiest)')).toBeInTheDocument()
+  })
+
+  it('HeatmapChart bins magnitude, rings the busiest cell, and shows a scale legend', () => {
+    const { container } = render(
+      <HeatmapChart rowLabels={['Mon']} columnLabels={['00', '01', '02']} values={[[0, 1, 8]]} />,
+    )
+
+    const empty = screen.getByLabelText('Mon, 00: 0')
+    const low = screen.getByLabelText('Mon, 01: 1')
+    const peak = screen.getByLabelText('Mon, 02: 8 (busiest)')
+    expect(empty).toHaveStyle({ backgroundColor: 'var(--muted)' })
+    expect(low).toHaveStyle({ backgroundColor: 'var(--heat-1)' })
+    expect(peak).toHaveStyle({ backgroundColor: 'var(--heat-4)' })
+    expect(container.querySelectorAll('[data-peak]')).toHaveLength(1)
+    // Legend: "none", four bins (1-2 ... 7-8) and the busiest marker.
+    expect(screen.getByText('none')).toBeInTheDocument()
+    expect(screen.getByText('7–8')).toBeInTheDocument()
+    expect(screen.getByText('busiest')).toBeInTheDocument()
+  })
+
+  it('HeatmapChart shows no legend for an all-zero grid', () => {
+    render(<HeatmapChart rowLabels={['Mon']} columnLabels={['00']} values={[[0]]} />)
+    expect(screen.queryByText('none')).not.toBeInTheDocument()
   })
 })

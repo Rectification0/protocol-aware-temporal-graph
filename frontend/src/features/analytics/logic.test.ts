@@ -16,6 +16,12 @@ import {
   LIVE_ATTACK_WINDOW_SECONDS,
   THREAT_TIER_SCORE_THRESHOLDS,
   THREAT_TREND_BUCKET_COUNT,
+  computePeriodDelta,
+  findGridPeak,
+  formatBucketSpan,
+  formatShare,
+  previousRange,
+  summarizeSeries,
 } from '@/features/analytics/logic'
 import type { LiveStreamEvent } from '@/store/liveStreamStore'
 import type { EntityScoreOut, MotifCompletionOut, PilotReportOut } from '@/types/api'
@@ -369,5 +375,65 @@ describe('buildAttackPatternCounts', () => {
 
   it('returns an empty array for no completions', () => {
     expect(buildAttackPatternCounts([])).toEqual([])
+  })
+})
+
+describe('chart presentation helpers', () => {
+  it('previousRange is the same-length window immediately before', () => {
+    expect(previousRange({ start: 1000, end: 1600 })).toEqual({ start: 400, end: 1000 })
+  })
+
+  it('computePeriodDelta reports direction and a signed percentage', () => {
+    expect(computePeriodDelta(12, 10)).toEqual({ direction: 'up', text: '+20% vs previous period' })
+    expect(computePeriodDelta(5, 10)).toEqual({
+      direction: 'down',
+      text: '-50% vs previous period',
+    })
+    expect(computePeriodDelta(7, 7)).toEqual({
+      direction: 'flat',
+      text: 'No change vs previous period',
+    })
+  })
+
+  it('computePeriodDelta never prints a percentage off a zero base', () => {
+    expect(computePeriodDelta(3, 0)).toEqual({
+      direction: 'up',
+      text: 'New vs previous period (none before)',
+    })
+  })
+
+  it('summarizeSeries totals, averages and finds the first peak', () => {
+    const points = [{ n: 1 }, { n: 4 }, { n: 4 }, { n: 0 }]
+    expect(summarizeSeries(points, 'n')).toEqual({ total: 9, average: 2.25, peakIndex: 1 })
+    expect(summarizeSeries([{ n: 0 }, { n: 0 }], 'n').peakIndex).toBeNull()
+  })
+
+  it('formatShare rounds a share and guards an empty total', () => {
+    expect(formatShare(1, 3)).toBe('33%')
+    expect(formatShare(1, 0)).toBe('--')
+  })
+
+  it('findGridPeak returns the largest non-zero cell, or null for an empty grid', () => {
+    expect(
+      findGridPeak([
+        [0, 2],
+        [5, 1],
+      ]),
+    ).toEqual({ row: 1, column: 0, value: 5 })
+    expect(findGridPeak([[0, 0]])).toBeNull()
+  })
+
+  it('formatBucketSpan shows times within a day and dates across days', () => {
+    const start = Date.UTC(2026, 9, 19, 14, 0) / 1000
+    // Assert on the shape rather than a timezone-dependent string.
+    expect(formatBucketSpan(start, 3600)).toMatch(/^\d{2}:\d{2} – \d{2}:\d{2}$/)
+    expect(formatBucketSpan(start, 3 * 86400)).toMatch(
+      /^[A-Z][a-z]{2} \d+ \d{2}:\d{2} – [A-Z][a-z]{2} \d+ \d{2}:\d{2}$/,
+    )
+  })
+
+  it('buildThreatTrendSeries gives every bucket a span label for the tooltip', () => {
+    const series = buildThreatTrendSeries([], [], 0, 24 * 3600)
+    expect(series.every((point) => point.spanLabel.includes('–'))).toBe(true)
   })
 })

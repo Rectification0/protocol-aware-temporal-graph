@@ -52,7 +52,7 @@ describe('AttackFrequencyHeatmap', () => {
     render(<AttackFrequencyHeatmap />, { wrapper })
 
     expect(await screen.findByText('Attack Frequency (UTC)')).toBeInTheDocument()
-    expect(await screen.findByLabelText('Mon, 05: 1')).toBeInTheDocument()
+    expect(await screen.findByLabelText('Mon, 05: 1 (busiest)')).toBeInTheDocument()
   })
 
   it('shows an empty state when there is no activity in the selected range', async () => {
@@ -88,6 +88,6 @@ describe('AttackFrequencyHeatmap', () => {
 
     render(<AttackFrequencyHeatmap />, { wrapper })
 
-    expect(await screen.findByLabelText('Mon, 05: 1')).toBeInTheDocument()
+    expect(await screen.findByLabelText('Mon, 05: 1 (busiest)')).toBeInTheDocument()
   })
 })

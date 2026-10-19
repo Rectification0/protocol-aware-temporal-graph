@@ -37,14 +37,18 @@ import { UserThreatCountsPanel } from '@/features/analytics/UserThreatCountsPane
 // F12.2/F12.4 lines for the full reasoning.
 function VisualizationsPlaceholder() {
   return (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-      {Array.from({ length: 4 }, (_, i) => (
-        <ChartSkeleton key={i} height={340} />
-      ))}
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+      <ChartSkeleton height={320} className="lg:col-span-2" />
+      <ChartSkeleton height={320} />
     </div>
   )
 }
 
+// Layout (chart refresh pass): numbers first -- the five range stat tiles
+// directly under the filter they're scoped by -- then Threat Trends as the
+// single full-width hero, then the three "what / who / how" breakdowns in
+// one row, then the deferred, below-the-fold visualizations. Every chart
+// card leads with its headline number (`components/chart-card.tsx`).
 export function Component() {
   return (
     <section className="space-y-4">
@@ -52,24 +56,7 @@ export function Component() {
         <h1 className="text-2xl font-semibold">Threat Analytics</h1>
         <TimeRangeFilter />
       </div>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <SectionErrorBoundary label="User threat counts">
-          <UserThreatCountsPanel />
-        </SectionErrorBoundary>
-        <SectionErrorBoundary label="Live attack counter">
-          <LiveAttackCounter />
-        </SectionErrorBoundary>
-      </div>
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <SectionErrorBoundary label="Threat trends">
-            <ThreatTrendsChart />
-          </SectionErrorBoundary>
-        </div>
-        <SectionErrorBoundary label="Threat severity">
-          <ThreatSeverityChart />
-        </SectionErrorBoundary>
-      </div>
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <SectionErrorBoundary label="Hackers detected">
           <HackersDetectedTile />
@@ -88,26 +75,47 @@ export function Component() {
         </SectionErrorBoundary>
       </div>
 
-      <h2 className="text-lg font-semibold">Visualizations</h2>
-      {/* F16.8: below the fold on most screens -- these five panels (and
-          their queries) mount only as the section scrolls into view. */}
+      <SectionErrorBoundary label="Threat trends">
+        <ThreatTrendsChart />
+      </SectionErrorBoundary>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <SectionErrorBoundary label="Threat severity">
+          <ThreatSeverityChart />
+        </SectionErrorBoundary>
+        <SectionErrorBoundary label="Top targeted resources">
+          <TopTargetedResourcesChart />
+        </SectionErrorBoundary>
+        <SectionErrorBoundary label="Attack patterns">
+          <AttackPatternsChart />
+        </SectionErrorBoundary>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <SectionErrorBoundary label="User threat counts">
+          <UserThreatCountsPanel />
+        </SectionErrorBoundary>
+        <SectionErrorBoundary label="Live attack counter">
+          <LiveAttackCounter />
+        </SectionErrorBoundary>
+      </div>
+
+      <h2 className="pt-2 text-lg font-semibold">Visualizations</h2>
+      {/* F16.8: below the fold on most screens -- these panels (and their
+          queries) mount only as the section scrolls into view. */}
       <DeferUntilVisible placeholder={<VisualizationsPlaceholder />}>
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <div className="lg:col-span-2">
+            <SectionErrorBoundary label="Attack frequency heatmap">
+              <AttackFrequencyHeatmap />
+            </SectionErrorBoundary>
+          </div>
           <SectionErrorBoundary label="Detection accuracy">
             <DetectionAccuracyChart />
           </SectionErrorBoundary>
-          <SectionErrorBoundary label="Geographic attack map">
-            <GeographicAttackMapCard />
-          </SectionErrorBoundary>
-          <SectionErrorBoundary label="Attack frequency heatmap">
-            <AttackFrequencyHeatmap />
-          </SectionErrorBoundary>
-          <SectionErrorBoundary label="Top targeted resources">
-            <TopTargetedResourcesChart />
-          </SectionErrorBoundary>
-          <div className="lg:col-span-2">
-            <SectionErrorBoundary label="Attack patterns">
-              <AttackPatternsChart />
+          <div className="lg:col-span-3">
+            <SectionErrorBoundary label="Geographic attack map">
+              <GeographicAttackMapCard />
             </SectionErrorBoundary>
           </div>
         </div>

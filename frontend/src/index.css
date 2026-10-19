@@ -71,11 +71,24 @@
   --input: #cbd5e1; /* slate-300 */
   --ring: #2563eb; /* blue-600, 4.9:1 vs --background */
 
+  /* Categorical order is blue, amber, violet, cyan, rose -- validated with the
+     dataviz skill's validate_palette.js (lightness band, chroma floor,
+     adjacent CVD + normal-vision separation, >=3:1 vs surface) in both
+     modes. Amber sits second so the common two-series case is warm vs
+     cool; the old blue -> cyan neighbours failed the dark-mode checks. */
   --chart-1: #2563eb; /* blue-600 */
-  --chart-2: #0891b2; /* cyan-600 */
-  --chart-3: #d97706; /* amber-600 */
-  --chart-4: #7c3aed; /* violet-600 */
+  --chart-2: #d97706; /* amber-600 */
+  --chart-3: #7c3aed; /* violet-600 */
+  --chart-4: #0891b2; /* cyan-600 */
   --chart-5: #e11d48; /* rose-600 */
+
+  /* Sequential (magnitude) ramp for the attack-frequency heatmap: one hue,
+     four binned steps light -> dark, the lightest still >=2:1 vs the card
+     (validated --ordinal). An empty cell uses --muted, not a ramp step. */
+  --heat-1: #60a5fa; /* blue-400 */
+  --heat-2: #3b82f6; /* blue-500 */
+  --heat-3: #1d4ed8; /* blue-700 */
+  --heat-4: #1e3a8a; /* blue-900 */
 
   --severity-critical: #b91c1c; /* red-700 -- 4.8:1 on its tint */
   --severity-high: #9a3412; /* orange-800 -- 5.5:1 on its tint */
@@ -126,11 +139,19 @@
   /* Chart categorical series (F5.5) -- generic data-series colors,
      deliberately distinct from the severity scale below (severity means
      something specific; chart series 1-5 don't). */
-  --chart-1: #3b82f6; /* blue */
-  --chart-2: #22d3ee; /* cyan */
-  --chart-3: #f59e0b; /* amber */
-  --chart-4: #a78bfa; /* violet */
-  --chart-5: #fb7185; /* rose */
+  /* Same hue order as :root, one step chosen per slot to sit inside the
+     dark-mode lightness band (validated against --card). */
+  --chart-1: #3b82f6; /* blue-500 */
+  --chart-2: #d97706; /* amber-600 */
+  --chart-3: #8b5cf6; /* violet-500 */
+  --chart-4: #0891b2; /* cyan-600 */
+  --chart-5: #f43f5e; /* rose-500 */
+
+  /* Heatmap ramp flips its anchor in dark mode: low = dim, high = bright. */
+  --heat-1: #1e40af; /* blue-800 */
+  --heat-2: #2563eb; /* blue-600 */
+  --heat-3: #3b82f6; /* blue-500 */
+  --heat-4: #93c5fd; /* blue-300 */
 
   /* Severity scale (F5.14, reused by F5.10's alert banner) -- each is a
      500-level shade verified at >=4.5:1 as *text* against both

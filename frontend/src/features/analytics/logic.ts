@@ -111,6 +111,9 @@ export const THREAT_TREND_BUCKET_COUNT = 24
 export type ThreatTrendPoint = {
   bucketStart: number
   label: string
+  /** The bucket's full span, e.g. "14:00 – 15:00" -- the tooltip's heading,
+   * since an axis tick alone doesn't say how wide a bucket is. */
+  spanLabel: string
   attacks: number
   highRiskEntities: number
 }
@@ -127,6 +130,17 @@ function formatBucketLabel(bucketStartSeconds: number, rangeSeconds: number): st
     : format(date, 'MMM d')
 }
 
+/** "14:00 – 15:00" within a day; "Oct 3 14:00 – Oct 4 14:00" once a bucket
+ * crosses midnight or spans a day or more. */
+export function formatBucketSpan(bucketStartSeconds: number, bucketSeconds: number): string {
+  const start = new Date(bucketStartSeconds * 1000)
+  const end = new Date((bucketStartSeconds + bucketSeconds) * 1000)
+  const sameDay = format(start, 'yyyy-MM-dd') === format(end, 'yyyy-MM-dd')
+  return sameDay && bucketSeconds < 24 * 60 * 60
+    ? `${format(start, 'HH:mm')} – ${format(end, 'HH:mm')}`
+    : `${format(start, 'MMM d HH:mm')} – ${format(end, 'MMM d HH:mm')}`
+}
+
 export function buildThreatTrendSeries(
   completions: MotifCompletionOut[],
   scores: EntityScoreOut[],
@@ -141,6 +155,7 @@ export function buildThreatTrendSeries(
     return {
       bucketStart,
       label: formatBucketLabel(bucketStart, rangeSeconds),
+      spanLabel: formatBucketSpan(bucketStart, bucketSeconds),
       attacks: 0,
       highRiskEntities: 0,
     }
@@ -345,4 +360,86 @@ export function buildAttackPatternCounts(completions: MotifCompletionOut[]): Att
   return [...counts.entries()]
     .map(([motifName, count]) => ({ motifName, count }))
     .sort((a, b) => b.count - a.count)
+}
+
+// --- Chart presentation (headline / delta / scales) ------------------------
+//
+// Shared by every chart card's header strip: the number the card leads
+// with and how it compares to the previous range of the same length. Pure,
+// so the "is this +12% or a new spike" judgement is tested once here rather
+// than per component. (The heatmap's color binning lives with the heatmap
+// itself, components/charts.tsx.)
+
+/** The range of the same length immediately before `range` -- the
+ * comparison window for a "vs previous period" delta. */
+export function previousRange(range: { start: number; end: number }): {
+  start: number
+  end: number
+} {
+  const length = range.end - range.start
+  return { start: range.start - length, end: range.start }
+}
+
+export type DeltaDirection = 'up' | 'down' | 'flat'
+
+export interface PeriodDelta {
+  direction: DeltaDirection
+  /** e.g. "+12% vs previous period", "New vs previous period", "No change vs previous period" */
+  text: string
+}
+
+export function computePeriodDelta(current: number, previous: number): PeriodDelta {
+  const suffix = 'vs previous period'
+  if (current === previous) return { direction: 'flat', text: `No change ${suffix}` }
+  const direction: DeltaDirection = current > previous ? 'up' : 'down'
+  // A percentage off a zero base is meaningless (∞%) -- say what happened.
+  if (previous === 0) return { direction, text: `New ${suffix} (none before)` }
+  const percent = Math.round(((current - previous) / previous) * 100)
+  return { direction, text: `${percent > 0 ? '+' : ''}${percent}% ${suffix}` }
+}
+
+export interface SeriesSummary {
+  total: number
+  average: number
+  peakIndex: number | null
+}
+
+/** Total, per-bucket average, and the peak bucket (first of ties; `null`
+ * when every bucket is zero, so nothing gets a "peak" marker). */
+export function summarizeSeries<T>(points: T[], key: keyof T): SeriesSummary {
+  let total = 0
+  let peakIndex: number | null = null
+  let peak = 0
+  points.forEach((point, index) => {
+    const value = Number(point[key]) || 0
+    total += value
+    if (value > peak) {
+      peak = value
+      peakIndex = index
+    }
+  })
+  return { total, average: points.length ? total / points.length : 0, peakIndex }
+}
+
+/** "18%" of `total`; "--" when there's no total to be a share of. */
+export function formatShare(value: number, total: number): string {
+  return total > 0 ? `${Math.round((value / total) * 100)}%` : '--'
+}
+
+export interface GridPeak {
+  row: number
+  column: number
+  value: number
+}
+
+export function findGridPeak(values: number[][]): GridPeak | null {
+  let best: GridPeak | null = null
+  values.forEach((row, rowIndex) =>
+    row.forEach((value, columnIndex) => {
+      if (value > 0 && (best === null || value > best.value)) {
+        best = { row: rowIndex, column: columnIndex, value }
+      }
+    }),
+  )
+  return best
 }
