@@ -31,5 +31,22 @@ export default defineConfig({
     // rather than this outer timeout firing first with a less specific
     // "Test timed out" message.
     testTimeout: 25_000,
+    // F16.4: `npm run test:coverage`. Report-only, no thresholds -- a
+    // number to watch, not a gate (gating would mostly reward testing
+    // shadcn's generated `ui/` primitives). Excludes code with nothing to
+    // execute (types, barrels, the entry point) so the % means something.
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: [
+        'src/**/*.test.{ts,tsx}',
+        'src/test/**',
+        'src/types/**',
+        'src/main.tsx',
+        'src/vite-env.d.ts',
+        'src/hooks/api/index.ts',
+      ],
+      reporter: ['text-summary', 'html'],
+    },
   },
 })

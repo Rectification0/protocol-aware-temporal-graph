@@ -315,6 +315,7 @@ npm run format           # Prettier --write
 npm run format:check      # Prettier --check
 npm run test              # Vitest (single run)
 npm run test:watch         # Vitest (watch mode)
+npm run test:coverage      # Vitest + v8 coverage (text summary + coverage/index.html; report-only, no thresholds)
 ```
 
 Copy `.env.example` to `.env.local` and point `VITE_API_BASE_URL` at a

@@ -10,6 +10,8 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+# `npm run test:coverage` HTML report (F16.4)
+coverage
 *.local
 
 # Editor directories and files
