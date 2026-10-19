@@ -55,6 +55,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import itertools
 import os
 import random
@@ -139,32 +140,71 @@ def _inject_attack(kind: str, rng: random.Random, num_users: int, machines: list
     raise ValueError(f"unknown attack kind {kind!r}")
 
 
+def _restamp_now(edges: list[Edge], base: float) -> list[Edge]:
+    """`--clock wall`: an injected attack's hops are generated with their
+    realistic gaps (e.g. 1h between lateral_pivot's hops), which would take
+    that long to play out in real time. Restamp them to *now*, in order, 1ms
+    apart -- still inside every motif's window, so detection is unchanged,
+    and every timestamp stays at the wall clock the dashboard measures
+    against. `edge_id=None` lets `Edge.__post_init__` recompute the id from
+    the new `t_e`."""
+    ordered = sorted(edges, key=lambda e: e.t_e)
+    return [dataclasses.replace(e, t_e=base + i * 0.001, edge_id=None) for i, e in enumerate(ordered)]
+
+
 def _synthetic_edge_stream(
-    rng: random.Random, num_users: int, num_machines: int, attack_every: int,
+    rng: random.Random, num_users: int, num_machines: int, attack_every: int, clock: str = "wall",
 ) -> Iterator[Edge]:
     """Infinite stream: background authentication noise, with one attack
     scenario injected every `attack_every` ticks (cycling through
-    `ATTACK_KINDS`). Runs until the caller stops iterating (`--max-ticks`)."""
+    `ATTACK_KINDS`). Runs until the caller stops iterating (`--max-ticks`).
+
+    `clock` decides what `t_e` means:
+      - "wall" (default): each edge is stamped with the real current time
+        when it's generated. The dashboard's time ranges ("last 24h", ending
+        now) always contain what the pipeline just produced. Decay plays out
+        in real time, so with the default half-lives (RDP ~1h ... DNS ~8d)
+        little decays during a short run -- pruning is then driven mostly by
+        graph-size pressure (`--max-edges`).
+      - "simulated": the original accelerated clock -- starts at now and
+        advances 1-30 simulated seconds per edge (a few hundred times real
+        time at the default `--tick-delay`), so decay/pruning are visible
+        within minutes. Every timestamp lands in the *future*, though, so the
+        dashboard's ranges won't contain the data (and health reports a
+        negative snapshot age).
+    """
     users = [f"u{i}" for i in range(num_users)]
     machines = [f"C{1000 + i}" for i in range(num_machines)]
     home_machines = {u: rng.sample(machines, k=min(len(machines), rng.randint(1, 3))) for u in users}
     attack_cycle = itertools.cycle(ATTACK_KINDS)
+    wall = clock == "wall"
 
     sim_t = time.time()
     tick = 0
     while True:
         tick += 1
+        if wall:
+            # Strictly increasing, not just monotonic: `edge_id` hashes t_e,
+            # so two same-src/dst/protocol edges sharing a clock reading
+            # (Windows' clock is coarse) would collide and silently merge in
+            # the graph store. Also survives the system clock stepping back.
+            sim_t = max(sim_t + 1e-3, time.time())
         if tick % attack_every == 0:
             kind = next(attack_cycle)
             print(f"[t={sim_t:.0f}] [ATTACK] injecting {kind}")
             injected = _inject_attack(kind, rng, num_users, machines, sim_t)
+            if wall:
+                injected = _restamp_now(injected, sim_t)
             yield from injected
-            sim_t = max([sim_t] + [e.t_e for e in injected]) + rng.uniform(1.0, 30.0)
+            sim_t = max([sim_t] + [e.t_e for e in injected])
+            if not wall:
+                sim_t += rng.uniform(1.0, 30.0)
         else:
             user = rng.choice(users)
             edge = _background_edge(rng, user, home_machines[user], sim_t)
             yield edge
-            sim_t += rng.uniform(1.0, 30.0)
+            if not wall:
+                sim_t += rng.uniform(1.0, 30.0)
 
 
 def _replay_edge_stream(staged_dir: Path) -> Iterator[Edge]:
@@ -192,6 +232,10 @@ def main() -> None:
     parser.add_argument("--num-machines", type=int, default=10, help="synthetic mode only")
     parser.add_argument("--tick-delay", type=float, default=0.05, help="wall-clock seconds to sleep between edges (human pacing only)")
     parser.add_argument("--attack-every", type=int, default=30, help="synthetic mode only: inject one attack scenario every N ticks")
+    parser.add_argument("--clock", choices=("wall", "simulated"), default="wall",
+                         help="synthetic mode only: 'wall' (default) stamps edges with the real current time, so the "
+                              "dashboard's time ranges show the data; 'simulated' runs an accelerated clock "
+                              "(visible decay/pruning in minutes, but timestamps land in the future)")
     parser.add_argument("--metrics-every", type=int, default=25, help="run a pruning + inference pass and print a metrics snapshot every N ticks")
     parser.add_argument("--z-threshold", type=float, default=3.0, help="|z-score| to print as an anomaly")
     parser.add_argument("--epsilon-min", type=float, default=0.05)
@@ -314,8 +358,13 @@ def main() -> None:
         edge_stream = _replay_edge_stream(args.staged_dir)
         print("replaying staged edges once -- stops automatically when exhausted\n")
     else:
-        edge_stream = _synthetic_edge_stream(rng, args.num_users, args.num_machines, args.attack_every)
-        print(f"users={args.num_users} machines={args.num_machines}")
+        edge_stream = _synthetic_edge_stream(rng, args.num_users, args.num_machines, args.attack_every, clock=args.clock)
+        print(f"users={args.num_users} machines={args.num_machines} clock={args.clock}")
+        if args.clock == "simulated":
+            print("WARNING: --clock simulated runs time a few hundred times faster than real time, so every "
+                  "timestamp lands in the future -- the dashboard's time ranges (e.g. 'last 24h') won't "
+                  "contain this data. Use --clock wall (the default) to watch it in the dashboard.",
+                  file=sys.stderr)
         print("running -- Ctrl+C to stop\n")
 
     sim_t: Optional[float] = None

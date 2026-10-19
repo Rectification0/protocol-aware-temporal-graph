@@ -604,6 +604,7 @@ python scripts/run_pipeline.py --source replay --staged-dir data/lanl/simulated/
 | `--num-machines` | `10` | Synthetic mode only |
 | `--tick-delay` | `0.05` | Wall-clock seconds to sleep between edges (human pacing only) |
 | `--attack-every` | `30` | Synthetic mode only: inject one attack scenario every N ticks |
+| `--clock` | `wall` | Synthetic mode only. `wall` stamps each edge with the real current time, so the dashboard's time ranges ("last 24h", ending now) contain the data. Injected attacks' hop gaps (up to 1h) collapse to milliseconds, which is still inside every motif window. `simulated` is the older accelerated clock (1–30 simulated s per edge, a few hundred times real time): decay and pruning show up within minutes, but every timestamp lands in the future, so the dashboard shows nothing for "now" and health reports a negative snapshot age. Replay mode always keeps the dataset's own historical timestamps; pick a matching custom range in the dashboard. |
 | `--metrics-every` | `25` | Run a pruning + inference pass and print a metrics snapshot every N ticks |
 | `--z-threshold` | `3.0` | \|z-score\| to print as an anomaly |
 | `--epsilon-min` | `0.05` | `EpsilonController` floor |
