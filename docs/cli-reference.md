@@ -22,7 +22,9 @@ and its own copy of this doc (including the Mordor-specific tasks below).
 | See the T-GNN's actual per-entity anomaly scores | [`score_entities`](#score_entities) |
 | Derive a suggested `λ_p` per protocol from real traffic | [`calibrate_decay`](#calibrate_decay) |
 | Watch the whole system run continuously, end to end | [`run_pipeline`](#run_pipeline-scriptsrun_pipelinepy) |
-| Set up the local dev Postgres database | [`init_postgres`](#init_postgres-scriptsinit_postgrespy) |
+| Set up the local dev Postgres database (+ frontend API tables) | [`init_postgres`](#init_postgres-scriptsinit_postgrespy) |
+| Serve the backend the frontend talks to (`frontend_implementation` branch) | [`t_gnn.api`](#t_gnnapi-python--m-t_gnnapi) |
+| Run the frontend dashboard itself (`frontend_implementation` branch) | `npm run dev` in `frontend/` — see [this task](#task-turn-on-the-backend-api-and-frontend-dashboard) |
 
 ## How they fit together
 
@@ -47,6 +49,31 @@ adds a third, `stage_mordor`). Every other tool below is a consumer of
 that same format, so either producer can feed any of them — e.g. generate
 synthetic traffic and run `pilot` against it, or replay it live through
 `run_pipeline`.
+
+### `frontend_implementation` branch only: the API + frontend layer
+
+None of the tools above talk HTTP. On this branch, `run_pipeline` gained a
+second output alongside its stdout/audit-log: it also persists to Postgres
+(`ApiStateWriter`, on by default — `--no-api-persist` turns it off), which
+a wholly separate process (`t_gnn.api`, FastAPI/uvicorn) reads from to
+serve the `frontend/` dashboard. The API never runs the graph
+store/motif engine/T-GNN itself — it's a decoupled, stateless reader:
+
+```
+run_pipeline.py  --writes-->  Postgres (t_gnn_dev) + Neo4j  <--reads--  python -m t_gnn.api
+  (feeds itself synthetic                                                (FastAPI, :8000)
+   traffic, or replays                                                        │
+   staged/ from above)                                                        │ HTTP/SSE
+                                                                                ▼
+                                                                    frontend/ (Vite, :5173)
+```
+
+That means **three long-running processes in three terminals** to see the
+dashboard populated with live data — see the
+[cookbook task below](#task-turn-on-the-backend-api-and-frontend-dashboard)
+for the exact commands, and [below that](#t_gnnapi-python--m-t_gnnapi) for
+the `t_gnn.api` flag reference. `frontend/README.md` covers the frontend
+side (env vars, npm scripts) in more detail.
 
 ---
 
@@ -75,6 +102,54 @@ docker compose up -d               # Flink UI :8081, Neo4j :7474/7687, Redis :63
 python scripts/init_postgres.py    # optional: only needed for Postgres-backed work
 pytest                             # confirm everything (including Neo4j/Redis integration tests) is green
 ```
+
+### Task: turn on the backend API and frontend dashboard
+
+`frontend_implementation` branch only. Three foreground processes, three
+terminals, started in this order. Assumes the one-time setup above
+(`.env`, `pip install -e ".[dev]"`, `python scripts/init_postgres.py`, and
+`npm install` in `frontend/` with `frontend/.env.example` copied to
+`frontend/.env.local`) is already done.
+
+```bash
+# terminal 1 — infra
+docker compose up -d       # Neo4j :7474/7687, Redis :6379 (needed for cold storage/motif state)
+
+# terminal 2 — feed the backend (synthetic traffic, forever; Ctrl+C to stop)
+python scripts/run_pipeline.py --metrics-every 5
+
+# terminal 3 — serve the API the frontend reads (never omit; persistence is on by default)
+python -m t_gnn.api --reload
+
+# terminal 4 — the dashboard itself
+cd frontend && npm run dev   # http://localhost:5173
+```
+
+```powershell
+# terminal 1 — infra
+docker compose up -d
+
+# terminal 2 — feed the backend
+python scripts/run_pipeline.py --metrics-every 5
+
+# terminal 3 — serve the API
+python -m t_gnn.api --reload
+
+# terminal 4 — the dashboard itself
+cd frontend; npm run dev
+```
+
+Open `http://localhost:5173` and log in with any free-text analyst name
+(mock auth — there's no real credential store yet, tasks.md F0.11). The
+Executive Dashboard should populate from whatever `run_pipeline.py` has
+written so far, with live updates arriving over SSE as new ticks process.
+Don't pass `run_pipeline.py --no-api-persist` here — that flag exists for
+running the pipeline in isolation (the rest of this doc's tasks), and
+skips the exact Postgres writes the frontend depends on. The frontend's
+entity-list/investigation page (tasks.md F10) only shows entities once
+their edges have actually been pruned to Neo4j cold storage, so give it a
+few `--metrics-every` cycles before expecting it to be populated. See
+[below](#t_gnnapi-python--m-t_gnnapi) for `t_gnn.api`'s flags.
 
 ### Task: generate simulated traffic and replay it live through the full pipeline
 
@@ -550,13 +625,55 @@ See `README.md`'s "Running the full pipeline live" for a fuller walkthrough.
 
 ---
 
+### `t_gnn.api` (`python -m t_gnn.api`)
+
+`frontend_implementation` branch only. Runs the FastAPI/uvicorn service
+`frontend/` talks to — a decoupled, stateless reader that never
+constructs `ActiveGraphStore`/`MotifEngine`/`TGNNInferenceEngine` itself,
+only reads what a separately-running `run_pipeline.py` process persisted
+to Postgres (and Neo4j for forensics/entity-list endpoints). Not a
+detection-pipeline tool in its own right — pair it with `run_pipeline`
+per the [cookbook task above](#task-turn-on-the-backend-api-and-frontend-dashboard).
+
+**Module**: `t_gnn.api` (`src/t_gnn/api/__main__.py`)
+**Prerequisites**: `python scripts/init_postgres.py` run at least once;
+`run_pipeline.py` running (with default Postgres persistence, i.e. without
+`--no-api-persist`) for there to be any data to read; `docker compose up -d`
+for the forensics/entity-list endpoints backed by Neo4j.
+
+```bash
+python -m t_gnn.api                    # listens on 127.0.0.1:8000
+python -m t_gnn.api --reload           # auto-reload on source changes, local dev only
+```
+
+```powershell
+python -m t_gnn.api
+python -m t_gnn.api --reload
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--host` | `127.0.0.1` | Bind address |
+| `--port` | `8000` | Bind port — must match `frontend/.env.local`'s `VITE_API_BASE_URL` |
+| `--reload` | off | Auto-reload on source changes (local dev only) |
+
+**Output**: standard uvicorn access logs. Sanity-check it's up and has
+data with `curl http://127.0.0.1:8000/api/health` and
+`curl http://127.0.0.1:8000/api/metrics/snapshot`.
+
+---
+
 ### `init_postgres` (`scripts/init_postgres.py`)
 
-Idempotently creates the local dev Postgres database
-(`t_gnn_dev`) — not part of the detection pipeline itself; Postgres is
-only used for persistence needs that don't map to Neo4j/Redis/Flink's
-roles (see `CLAUDE.md`'s "Local dev database" section). No tables are
-created, only the database.
+Idempotently creates the local dev Postgres database (`t_gnn_dev`) and,
+on this branch, the frontend API layer's tables within it (`users`,
+`metrics_snapshots`, `entity_scores`, `motif_completions`, `motif_resets`,
+`motif_feedback`, `alert_acknowledgements` — DDL owned by
+`t_gnn.api_state.create_api_tables()`). Postgres itself is not part of the
+detection pipeline; it's used for persistence needs that don't map to
+Neo4j/Redis/Flink's roles (see `CLAUDE.md`'s "Local dev database"
+section) — the API layer's read/write bridge to `run_pipeline.py` is
+exactly that kind of need.
 
 **Prerequisites**: a reachable local Postgres instance (connection
 settings from `.env`).
