@@ -303,6 +303,44 @@ F13.5's Critical Alerts panel is a separate, fixed critical-only subset
 and isn't affected), and `src/store/autoRefreshStore.ts` (F13.3,
 retrofitted with `persist` in this pass -- previously in-memory only).
 
+## Quality, testing & performance (Milestone F16)
+
+- **Theming (F16.2).** `src/index.css` has a light palette on `:root` and the
+  dark palette on `.dark`. Every text token is >=4.5:1 against both surfaces,
+  and severity/status text is also >=4.5:1 against its own tonal-badge tint.
+  An inline pre-paint script in `index.html` applies the saved theme before
+  React loads.
+- **Error boundaries (F16.9).** A crashing page renders inside the shell.
+  `SectionErrorBoundary` contains crashes to a single tile, panel or table.
+  `LoadErrorNotice` names failed data sources instead of showing "no
+  results".
+- **Tests (F16.4/F16.5).** Unit tests are colocated `*.test.ts(x)`. New tests
+  use `src/test/query.tsx`'s `createQueryWrapper()` and mock
+  `@/api/endpoints`. Cross-page journeys run through the real route tree
+  with `src/test/integration/renderApp.tsx`. `npm run test:coverage`
+  reports coverage.
+- **Performance (F16.6–F16.8).** The app shell holds the SSE connection
+  without subscribing to it. Live lists use stable `liveEventKey()` keys and
+  memoized rows. `npm run check:bundle` guards the initial-load budget.
+  Recharts loads lazily through `@/components/charts`. Below-the-fold
+  sections use `DeferUntilVisible`.
+
+## Deployment (Milestone F17)
+
+The production image (`Dockerfile`) is a static nginx build that contains
+nothing environment-specific. `/config.js` is written at container start
+from `API_BASE_URL`/`MOCK_AUTH_ENABLED` (`docker/frontend-entrypoint.sh`),
+and `src/config/env.ts` prefers it over the build-time `VITE_API_BASE_URL`.
+nginx serves the SPA and reverse-proxies `/api` to `API_UPSTREAM` on the
+same origin (`docker/nginx.conf.template`), with SSE-safe settings. For
+the full topology, the compose profile, every variable and the CI image
+publishing, see the root `docs/deployment.md`.
+
+```bash
+docker build -t t-gnn-frontend .
+docker run -p 8080:80 -e API_UPSTREAM=http://host.docker.internal:8000 t-gnn-frontend
+```
+
 ## Commands
 
 ```bash
@@ -321,6 +359,8 @@ npm run check:bundle       # build, then verify route splitting: initial JS budg
 
 Copy `.env.example` to `.env.local` and point `VITE_API_BASE_URL` at a
 running `python -m t_gnn.api` instance (see the root repo's Milestone F0).
+A deployed build is configured at runtime via `/config.js` instead -- see
+Deployment above.
 
 ## Pre-commit hooks
 

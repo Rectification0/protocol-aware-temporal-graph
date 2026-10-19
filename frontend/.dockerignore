@@ -1,0 +1,7 @@
+# frontend/Dockerfile build context (tasks.md F17.2).
+node_modules
+dist
+coverage
+.env.local
+.env.*.local
+*.log

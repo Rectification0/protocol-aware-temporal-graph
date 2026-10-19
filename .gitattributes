@@ -1,0 +1,7 @@
+# Files executed or parsed inside Linux containers (tasks.md F17.2) must keep
+# LF line endings even on a Windows checkout with core.autocrlf -- a CRLF
+# shebang script fails with "/bin/sh^M: not found".
+*.sh text eol=lf
+*.template text eol=lf
+Dockerfile text eol=lf
+*.Dockerfile text eol=lf

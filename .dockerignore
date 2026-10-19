@@ -1,0 +1,19 @@
+# Root build context (docker/api.Dockerfile, tasks.md F17.2). Keeps local
+# data, secrets and the frontend's node_modules out of the context sent to
+# the daemon -- the API image only needs pyproject.toml, src/ and config/.
+.git
+.github
+.claude
+.env
+**/__pycache__
+**/*.pyc
+*.egg-info
+.pytest_cache
+data
+logs
+frontend
+docs
+tests
+*.zip
+*.json
+!config/**/*.json

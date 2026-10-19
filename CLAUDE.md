@@ -35,7 +35,7 @@ Every phase in `tasks.md` (0–8) has code; further backend work is enhancement/
 
 ### Frontend status (`frontend_implementation` branch — NOT merged to `main`, per developer instruction)
 
-A React SOC dashboard, planned across Milestones F0–F17 in `tasks.md`'s "Frontend Implementation" section (only exists on this branch). **Milestones F0–F15 are complete**; F16 is in progress (F16.2, F16.4–F16.9 done), F17 remains — check `tasks.md` for current status before starting new frontend work.
+A React SOC dashboard, planned across Milestones F0–F17 in `tasks.md`'s "Frontend Implementation" section (only exists on this branch). **Milestones F0–F15 and F17 are complete**; F16 is all done except F16.1 (responsive pass) and F16.3 (accessibility pass) — check `tasks.md` for current status before starting new frontend work.
 
 Key standing decisions:
 - The API is a **decoupled, stateless reader** (FastAPI/uvicorn) — never constructs `ActiveGraphStore`/`MotifEngine`/`TGNNInferenceEngine` itself, only reads what a separately-running pipeline process persisted to Postgres/Neo4j.
@@ -76,6 +76,10 @@ Key standing decisions:
 **F14 — Company Security Overview.** Backend: `MetricsCollector` gained a lifetime `total_edges_processed` counter (this repo's first real `ALTER TABLE` migration, since the table might already exist in a dev database) fed from `run_pipeline.py`; and `ApiStateReader.average_response_time()` (new `GET /api/alerts/response-time`) is the first consumer of `list_alert_acknowledgements()` (real since F13.6, previously unused) — parses the trailing timestamp out of each `detection_ref`, averaged in Python (not SQL, to avoid a Postgres-14+-only string function for an infrequent aggregate). `SecurityOverviewPage` mostly reuses F6 tiles as-is (F14.1/F14.2) plus three new tiles for monitored-users count, processed-logs count (explicit `en-US` locale formatting — a real bug caught by a locale-sensitive test), and average ack response time.
 
 **F15 — Settings.** No backend changes — every setting is a client-side preference or a read-only view of an already-existing endpoint. New `features/settings/` folder (`ThemeSection`, `NotificationSection`, `ApiConfigSection`, `AlertThresholdsSection` + `logic.ts`) assembled onto `SettingsPage`. Three new/retrofitted Zustand stores, all persisted to `localStorage` via `zustand/middleware`'s `persist` (F15.6's actual scope — not a seventh setting, the persistence layer the other three use): `themeStore` (F15.1 — `useAppliedTheme()` toggles `<html>`'s `.dark` class; was a visual no-op until F16.2 gave `:root` a real light palette) and `notificationSettingsStore` (F15.2 — narrows `features/monitoring/logic.ts`'s new `filterEnabledAlertEvents`/`countUnreadEnabledAlerts`, consumed by `NotificationsPanel`/`useLiveNotifications`; F13.5's Critical Alerts panel is deliberately unaffected, per tasks.md F15.2's own wording) are new; `autoRefreshStore` (F13.3) gained `persist` retrofitted onto it rather than leaving it the odd one out. F15.3 (API config) and F15.5 (alert thresholds) are both read-only by design — the former because changing the base URL means reconnecting to a different backend process entirely, not a client preference; the latter because `config/protocols.yaml`/`config/motifs.yaml` are still hand-edited + `reload()`'d (`docs/operational-runbook.md`), with an editable UI explicitly out of this milestone's scope.
+
+**F16 — Quality (partial).** Light palette (F16.2, contrast-checked incl. tonal-badge tints) + pre-paint theme script; page/section error boundaries plus `LoadErrorNotice` for failed fetches (F16.9); unit-test gap closure + `test:coverage` (F16.4) and real-route-tree integration tests (F16.5); live-path render fixes -- connection-only `useLiveStreamConnection()`, `liveEventKey()`, memoized feed rows, shared `useNow()` (F16.6); `check:bundle` (F16.7); lazy Recharts facade + `DeferUntilVisible` (F16.8). F16.1/F16.3 not started.
+
+**F17 — Deployment.** Runtime `/config.js` config (one image, any environment; `""` = same origin); nginx dashboard image + editable-install API image (config paths are source-tree-relative), both under compose's `dashboard` profile; same-origin `/api` proxy resolving its upstream per request (a static upstream stopped nginx starting when `api` didn't resolve); configurable `API_CORS_ORIGINS`; CI builds/smoke-tests/pushes both images to GHCR on branch pushes. All in `docs/deployment.md`.
 
 ## End-of-phase / end-of-milestone checklist
 
@@ -138,6 +142,7 @@ python -m t_gnn.data.simulate_traffic --output-dir <dir> [--num-users 200] [--nu
 python -m t_gnn.pilot --staged-dir <dir> --redteam <redteam.txt> [--z-threshold 3.0] [--output report.json]   # false-positive/negative rates vs. labeled ground truth
 python -m t_gnn.score_entities --staged-dir <dir> [--top 20] [--output scores.json]   # replay staged edges and print live T-GNN per-entity scores
 docker compose up -d                     # bring up Flink/Redis/Neo4j (needed for the Neo4j and Redis integration tests)
+docker compose --profile dashboard up -d --build   # frontend_implementation: + API and dashboard containers (http://localhost:8080) -- see docs/deployment.md
 ```
 
 There is no lint/format/build step configured for the Python backend.

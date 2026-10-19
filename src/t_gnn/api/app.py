@@ -19,12 +19,19 @@ F0.15's conventions, applied uniformly across every router:
   - OpenAPI schema is generated for free by FastAPI at `/openapi.json`,
     which F4.1's typed frontend client codegens from.
 
-CORS is left permissive here (any localhost origin) for local frontend dev
-against `npm run dev`'s Vite server; tightening this to a specific origin
-list is tasks.md F17.3's job once a real deployment topology exists.
+CORS (tasks.md F17.3): the containerized deployment needs none -- the
+frontend's nginx serves the app and reverse-proxies `/api` on the same
+origin. `API_CORS_ORIGINS` (comma-separated exact origins) covers every
+other topology, e.g. the dashboard on its own domain calling this API
+directly; unset, it defaults to `npm run dev`'s Vite server only. An empty
+value disables cross-origin access entirely. A wildcard is deliberately not
+supported -- the API carries analyst-attributed writes (F9.5 feedback,
+F13.6 acks).
 """
 
 from __future__ import annotations
+
+import os
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,6 +52,19 @@ from t_gnn.api.routers import (
 )
 
 
+DEFAULT_CORS_ORIGINS = ("http://localhost:5173", "http://127.0.0.1:5173")
+
+
+def cors_origins_from_env(value: str | None) -> list[str]:
+    """Parse `API_CORS_ORIGINS`: unset -> dev defaults; "" -> none; else a comma list."""
+    if value is None:
+        return list(DEFAULT_CORS_ORIGINS)
+    origins = [origin.strip().rstrip("/") for origin in value.split(",") if origin.strip()]
+    if "*" in origins:
+        raise ValueError("API_CORS_ORIGINS does not accept '*'; list each allowed origin explicitly")
+    return origins
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="t-gnn frontend API",
@@ -54,7 +74,7 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+        allow_origins=cors_origins_from_env(os.environ.get("API_CORS_ORIGINS")),
         allow_methods=["*"],
         allow_headers=["*"],
     )

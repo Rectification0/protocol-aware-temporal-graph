@@ -3,15 +3,28 @@ name: Frontend CI
 # tasks.md F1.7 -- this repo's only prior CI-relevant command was `pytest`
 # (Python backend, no workflow file existed for it either). This is the
 # first CI job of any kind, scoped to the frontend/ dashboard app.
+#
+# tasks.md F17.4 added the `images` job: builds the dashboard and API
+# container images (F17.2), smoke-tests the dashboard image, and -- on
+# pushes to the branch only, never PRs -- publishes both to GHCR. The API
+# image is built from the Python sources, hence the extra trigger paths.
 on:
   push:
     branches: [frontend_implementation]
     paths:
       - "frontend/**"
+      - "src/**"
+      - "config/**"
+      - "pyproject.toml"
+      - "docker/**"
       - ".github/workflows/frontend-ci.yml"
   pull_request:
     paths:
       - "frontend/**"
+      - "src/**"
+      - "config/**"
+      - "pyproject.toml"
+      - "docker/**"
       - ".github/workflows/frontend-ci.yml"
 
 defaults:
@@ -52,3 +65,81 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # F16.7: initial-load budget + no page/Recharts/day-picker code in it.
+      - name: Bundle check
+        run: node scripts/check-bundle.mjs
+
+  images:
+    needs: build-lint-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # GHCR image names must be lowercase; the repo owner may not be.
+      - name: Image names
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "FRONTEND_IMAGE=ghcr.io/${owner}/t-gnn-frontend" >> "$GITHUB_ENV"
+          echo "API_IMAGE=ghcr.io/${owner}/t-gnn-api" >> "$GITHUB_ENV"
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build dashboard image
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          load: true
+          tags: |
+            ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+            ${{ env.FRONTEND_IMAGE }}:${{ github.ref_name }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+      # Runs the real image standalone (no API -- /api would 502, which is
+      # the point: nginx must still start): config renders, runtime config
+      # is written from env (F17.1), the SPA shell + fallback and security
+      # headers are served.
+      - name: Smoke-test dashboard image
+        run: |
+          docker run -d --name dash -p 8080:80 \
+            -e API_BASE_URL=https://api.example.test -e MOCK_AUTH_ENABLED=false \
+            "${FRONTEND_IMAGE}:${GITHUB_SHA}"
+          for i in $(seq 1 20); do curl -fsS http://127.0.0.1:8080/healthz && break; sleep 1; done
+          curl -fsS http://127.0.0.1:8080/config.js | tee /dev/stderr \
+            | grep -q '"apiBaseUrl":"https://api.example.test","mockAuthEnabled":false'
+          curl -fsS http://127.0.0.1:8080/investigation/User:alice | grep -q '<div id="root">'
+          curl -fsSI http://127.0.0.1:8080/ | grep -qi '^x-frame-options: DENY'
+          docker rm -f dash
+
+      - name: Build API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/api.Dockerfile
+          load: true
+          tags: |
+            ${{ env.API_IMAGE }}:${{ github.sha }}
+            ${{ env.API_IMAGE }}:${{ github.ref_name }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - name: Push images
+        if: github.event_name == 'push'
+        run: |
+          docker push --all-tags "${FRONTEND_IMAGE}"
+          docker push --all-tags "${API_IMAGE}"

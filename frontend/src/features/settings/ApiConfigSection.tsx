@@ -19,8 +19,17 @@ export function ApiConfigSection() {
         <span className="text-muted-foreground">Environment</span>
         <code className="rounded bg-muted px-2 py-1 text-xs">{import.meta.env.MODE}</code>
       </div>
+      <div className="flex items-center justify-between gap-4">
+        <span className="text-muted-foreground">Configured by</span>
+        <code className="rounded bg-muted px-2 py-1 text-xs">
+          {env.apiBaseUrlSource === 'runtime'
+            ? 'runtime /config.js'
+            : 'build-time VITE_API_BASE_URL'}
+        </code>
+      </div>
       <p className="text-xs text-muted-foreground">
-        Set at build/start time via <code>VITE_API_BASE_URL</code> (see{' '}
+        Set per deployment via <code>/config.js</code> (the container&apos;s{' '}
+        <code>API_BASE_URL</code>), or at build time via <code>VITE_API_BASE_URL</code> (see{' '}
         <code>frontend/.env.example</code>) -- not editable here.
       </p>
     </div>

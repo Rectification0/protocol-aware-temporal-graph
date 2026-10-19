@@ -657,9 +657,20 @@ python -m t_gnn.api --reload
 | `--port` | `8000` | Bind port — must match `frontend/.env.local`'s `VITE_API_BASE_URL` |
 | `--reload` | off | Auto-reload on source changes (local dev only) |
 
+**Environment**: besides `.env`'s connection settings, `API_CORS_ORIGINS`
+(F17.3) is a comma-separated list of exact origins allowed to call the API
+cross-origin. Unset, it defaults to the Vite dev server
+(`http://localhost:5173`, `http://127.0.0.1:5173`). Empty means none. `*` is
+rejected.
+
 **Output**: standard uvicorn access logs. Sanity-check it's up and has
 data with `curl http://127.0.0.1:8000/api/health` and
 `curl http://127.0.0.1:8000/api/metrics/snapshot`.
+
+**As a container** (F17.2): `docker compose --profile dashboard up -d
+--build` runs this API alongside the dashboard, behind the dashboard's
+nginx proxy at `http://localhost:8080`. See
+[`docs/deployment.md`](deployment.md).
 
 ---
 

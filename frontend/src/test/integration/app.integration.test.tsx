@@ -107,12 +107,17 @@ describe('navigation', () => {
     expect(
       await screen.findByRole('heading', { name: /Investigation: User:alice/ }),
     ).toBeInTheDocument()
-    expect(api.getEntityScore).toHaveBeenCalledWith('User:alice', expect.anything())
-    expect(api.getEntityForensics).toHaveBeenCalledWith(
-      'User:alice',
-      expect.any(Number),
-      expect.any(Number),
-      expect.anything(),
+    // The heading renders before the page's queries fire -- wait for them.
+    await waitFor(() =>
+      expect(api.getEntityScore).toHaveBeenCalledWith('User:alice', expect.anything()),
+    )
+    await waitFor(() =>
+      expect(api.getEntityForensics).toHaveBeenCalledWith(
+        'User:alice',
+        expect.any(Number),
+        expect.any(Number),
+        expect.anything(),
+      ),
     )
   })
 

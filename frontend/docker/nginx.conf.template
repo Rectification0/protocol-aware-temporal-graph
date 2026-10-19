@@ -1,0 +1,92 @@
+# tasks.md F17.3: serves the built SPA and reverse-proxies the API on the
+# same origin. Rendered at container start by the nginx image's envsubst
+# template step -- NGINX_ENVSUBST_FILTER (Dockerfile) limits substitution to
+# API_UPSTREAM/NGINX_LOCAL_RESOLVERS, so nginx's own $variables below are
+# left untouched.
+#
+# The upstream is resolved per request (resolver + proxy_pass via a
+# variable), not once at startup: a static `proxy_pass http://api:8000`
+# makes nginx refuse to *start* whenever that host doesn't resolve (API
+# not up yet, or the image run outside compose), and pins a stale IP
+# after the API container restarts. This way the dashboard always serves,
+# and /api answers 502 until the API is reachable.
+
+server {
+    listen 80;
+    server_name _;
+    root /usr/share/nginx/html;
+
+    # NGINX_LOCAL_RESOLVERS: the container's own DNS (Docker's embedded
+    # resolver under compose), exported by the image's 15-local-resolvers
+    # step (NGINX_ENTRYPOINT_LOCAL_RESOLVERS in the Dockerfile).
+    resolver ${NGINX_LOCAL_RESOLVERS} valid=10s ipv6=off;
+    set $api_upstream ${API_UPSTREAM};
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+    gzip_min_length 1024;
+
+    # Security headers. nginx drops server-level add_header in any location
+    # that sets its own, so each such location below repeats them.
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    # F0.10's SSE stream. Buffering must be off or events are held back
+    # until a buffer fills; the long read timeout outlives the server's
+    # heartbeat interval so idle-but-healthy streams aren't cut.
+    location = /api/stream/events {
+        proxy_pass $api_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 1h;
+        # Cache-Control: no-cache comes from the API's own SSE response.
+    }
+
+    location /api/ {
+        proxy_pass $api_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Content-hashed by Vite -- safe to cache forever. A missing asset is a
+    # real 404, never the SPA shell (which would fail as "invalid JS").
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header X-Frame-Options DENY always;
+        add_header Referrer-Policy strict-origin-when-cross-origin always;
+        try_files $uri =404;
+    }
+
+    # Per-deployment runtime config (F17.1) and the shell must never be
+    # cached, or a redeploy keeps serving stale chunk references/config.
+    location = /config.js {
+        add_header Cache-Control no-store always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header X-Frame-Options DENY always;
+        add_header Referrer-Policy strict-origin-when-cross-origin always;
+        try_files $uri =404;
+    }
+
+    location / {
+        add_header Cache-Control no-cache always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header X-Frame-Options DENY always;
+        add_header Referrer-Policy strict-origin-when-cross-origin always;
+        try_files $uri /index.html;
+    }
+}

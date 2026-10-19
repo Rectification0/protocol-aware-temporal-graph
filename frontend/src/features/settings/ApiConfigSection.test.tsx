@@ -10,5 +10,7 @@ describe('ApiConfigSection', () => {
     expect(screen.getByText(env.apiBaseUrl)).toBeInTheDocument()
     expect(screen.getByText(import.meta.env.MODE)).toBeInTheDocument()
     expect(screen.getByText(/not editable here/)).toBeInTheDocument()
+    // No /config.js in tests, so the build-time variable is the source.
+    expect(screen.getByText('build-time VITE_API_BASE_URL')).toBeInTheDocument()
   })
 })

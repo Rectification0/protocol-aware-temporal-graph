@@ -589,3 +589,40 @@ def test_stream_events_emits_entity_score_update(client, fake_state):
     scores = [payload for e, payload in events if e == "inference_result"]
     assert len(scores) == 1
     assert scores[0]["entity_id"] == "User:alice"
+
+
+# --- tasks.md F17.3: configurable CORS -------------------------------------
+
+from t_gnn.api.app import DEFAULT_CORS_ORIGINS, cors_origins_from_env, create_app  # noqa: E402
+
+
+def test_cors_origins_default_to_vite_dev_server_when_unset():
+    assert cors_origins_from_env(None) == list(DEFAULT_CORS_ORIGINS)
+
+
+def test_cors_origins_parse_a_comma_list_and_strip_trailing_slashes():
+    assert cors_origins_from_env(" https://soc.example.com/ ,https://soc-staging.example.com") == [
+        "https://soc.example.com",
+        "https://soc-staging.example.com",
+    ]
+
+
+def test_cors_origins_empty_value_disables_cross_origin_access():
+    assert cors_origins_from_env("") == []
+
+
+def test_cors_origins_reject_wildcard():
+    with pytest.raises(ValueError):
+        cors_origins_from_env("*")
+
+
+def test_cors_env_is_applied_to_preflight_responses(monkeypatch):
+    monkeypatch.setenv("API_CORS_ORIGINS", "https://soc.example.com")
+    configured = TestClient(create_app())
+    preflight = {"Access-Control-Request-Method": "GET"}
+
+    allowed = configured.options("/api/health", headers={"Origin": "https://soc.example.com", **preflight})
+    assert allowed.headers.get("access-control-allow-origin") == "https://soc.example.com"
+
+    denied = configured.options("/api/health", headers={"Origin": "http://localhost:5173", **preflight})
+    assert "access-control-allow-origin" not in denied.headers
