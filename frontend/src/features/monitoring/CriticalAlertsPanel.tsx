@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { AlertBanner } from '@/components/alert-banner'
 import { AckButton } from '@/features/monitoring/AckButton'
 import {
@@ -5,7 +6,7 @@ import {
   filterCriticalEvents,
   summarizeLiveEvent,
 } from '@/features/monitoring/logic'
-import { useLiveStreamStore } from '@/store/liveStreamStore'
+import { liveEventKey, useLiveStreamStore } from '@/store/liveStreamStore'
 import type { LiveStreamEvent } from '@/store/liveStreamStore'
 
 const MAX_CRITICAL_ALERTS = 10
@@ -22,7 +23,10 @@ function alertTitle(event: LiveStreamEvent): string {
 // rather than changing that shared component's props.
 export function CriticalAlertsPanel() {
   const events = useLiveStreamStore((state) => state.events)
-  const criticalEvents = filterCriticalEvents(events).slice(0, MAX_CRITICAL_ALERTS)
+  const criticalEvents = useMemo(
+    () => filterCriticalEvents(events).slice(0, MAX_CRITICAL_ALERTS),
+    [events],
+  )
 
   if (criticalEvents.length === 0) {
     return <p className="text-sm text-muted-foreground">No critical alerts right now.</p>
@@ -30,10 +34,10 @@ export function CriticalAlertsPanel() {
 
   return (
     <div className="space-y-2">
-      {criticalEvents.map((event, index) => {
+      {criticalEvents.map((event) => {
         const detection = detectionRefFor(event)
         return (
-          <div key={`${event.receivedAt}-${index}`} className="space-y-1">
+          <div key={liveEventKey(event)} className="space-y-1">
             <AlertBanner
               severity="critical"
               title={alertTitle(event)}

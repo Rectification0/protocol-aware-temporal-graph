@@ -146,7 +146,12 @@ export interface UseLiveStreamOptions {
   eventSourceFactory?: EventSourceFactory
 }
 
-export function useLiveStream(options: UseLiveStreamOptions = {}) {
+/** F16.6: opens/owns the SSE connection *without* subscribing to any
+ * stream state -- for `AppShell`, which must hold the one connection but
+ * would otherwise re-render the whole shell (Navbar, Sidebar) on every
+ * event and heartbeat. Consumers read the store via `useLiveStream` (or
+ * `useLiveStreamStore` selectors) instead. */
+export function useLiveStreamConnection(options: UseLiveStreamOptions = {}) {
   const { enabled = true, eventSourceFactory } = options
   const queryClient = useQueryClient()
 
@@ -160,7 +165,10 @@ export function useLiveStream(options: UseLiveStreamOptions = {}) {
     manager.start()
     return () => manager.stop()
   }, [enabled, eventSourceFactory, queryClient])
+}
 
+export function useLiveStream(options: UseLiveStreamOptions = {}) {
+  useLiveStreamConnection(options)
   return {
     status: useLiveStreamStore((state) => state.status),
     events: useLiveStreamStore((state) => state.events),

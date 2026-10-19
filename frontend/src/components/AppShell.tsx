@@ -1,5 +1,5 @@
 import { Outlet } from 'react-router-dom'
-import { useLiveStream } from '@/api/liveStream'
+import { useLiveStreamConnection } from '@/api/liveStream'
 import { Navbar } from '@/components/Navbar'
 import { Sidebar } from '@/components/Sidebar'
 import { useLiveNotifications } from '@/features/monitoring/useLiveNotifications'
@@ -21,10 +21,19 @@ import { useAppliedTheme } from '@/store/themeStore'
 // so an unauthenticated visitor never opens a live connection.
 // `useLiveNotifications()` (F13.4) piggybacks on the same store this
 // connection feeds, toasting newly-arrived alert-worthy events.
+//
+// F16.6: neither hook may subscribe *this* component to per-event state --
+// the shell re-rendering on every SSE event/heartbeat re-renders Navbar and
+// Sidebar with it. Hence `useLiveStreamConnection` (connection only, no
+// store subscription) and toasts living in a null-rendering child.
+function LiveNotifications({ enabled }: { enabled: boolean }) {
+  useLiveNotifications({ enabled })
+  return null
+}
+
 export function AppShell() {
   const hasSession = isSessionValid(useAuthStore((state) => state.session))
-  useLiveStream({ enabled: hasSession })
-  useLiveNotifications({ enabled: hasSession })
+  useLiveStreamConnection({ enabled: hasSession })
   // F15.1: applies the Settings page's theme preference for the whole
   // authenticated app; `/login` (outside this shell) keeps index.html's
   // static default.
@@ -32,6 +41,7 @@ export function AppShell() {
 
   return (
     <div className="flex min-h-svh flex-col">
+      <LiveNotifications enabled={hasSession} />
       <Navbar />
       <div className="flex flex-1">
         <Sidebar />

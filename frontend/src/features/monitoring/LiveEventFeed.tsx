@@ -1,4 +1,5 @@
-import { formatDistanceToNowStrict } from 'date-fns'
+import { formatDistanceStrict, formatDistanceToNowStrict } from 'date-fns'
+import { memo } from 'react'
 import { SeverityBadge } from '@/components/severity-badge'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -12,7 +13,8 @@ import {
   eventTypeLabel,
   summarizeLiveEvent,
 } from '@/features/monitoring/logic'
-import { useLiveStreamStore } from '@/store/liveStreamStore'
+import { useNow } from '@/hooks/useNow'
+import { liveEventKey, type LiveStreamEvent, useLiveStreamStore } from '@/store/liveStreamStore'
 
 const CONNECTION_STATUS_LABEL: Record<string, string> = {
   open: 'Live',
@@ -31,6 +33,35 @@ const CONNECTION_STATUS_LABEL: Record<string, string> = {
 // gap. F13.6's `AckButton` renders only for the two rows that are
 // actually detections (`detectionRefFor()` returns `null` for
 // `motif_reset`/`prune`).
+// F16.6: memoized per event (events are immutable, so object identity is a
+// sufficient prop comparison) -- a new event renders one new row instead
+// of re-rendering all 200. `useNow()` keeps the relative time ticking.
+const LiveEventRow = memo(function LiveEventRow({ event }: { event: LiveStreamEvent }) {
+  const now = useNow()
+  const severity = eventSeverity(event)
+  const detection = detectionRefFor(event)
+  return (
+    <TableRow>
+      <TableCell className="w-28 font-mono text-xs">{eventTypeLabel(event.type)}</TableCell>
+      <TableCell className="w-20">{severity && <SeverityBadge severity={severity} />}</TableCell>
+      <TableCell className="text-sm">{summarizeLiveEvent(event)}</TableCell>
+      <TableCell className="w-28 text-xs text-muted-foreground">
+        {formatDistanceStrict(new Date(event.receivedAt), Math.max(now, event.receivedAt), {
+          addSuffix: true,
+        })}
+      </TableCell>
+      <TableCell className="w-32">
+        {detection && (
+          <AckButton
+            detectionType={detection.detectionType}
+            detectionRef={detection.detectionRef}
+          />
+        )}
+      </TableCell>
+    </TableRow>
+  )
+})
+
 export function LiveEventFeed() {
   const status = useLiveStreamStore((state) => state.status)
   const events = useLiveStreamStore((state) => state.events)
@@ -69,35 +100,7 @@ export function LiveEventFeed() {
                 </TableCell>
               </TableRow>
             ) : (
-              events.map((event, index) => {
-                const severity = eventSeverity(event)
-                const detection = detectionRefFor(event)
-                return (
-                  // Live events have no stable server-assigned id shared
-                  // across all four types -- `receivedAt` plus index is
-                  // unique enough for this client-only, append-only feed.
-                  <TableRow key={`${event.receivedAt}-${index}`}>
-                    <TableCell className="w-28 font-mono text-xs">
-                      {eventTypeLabel(event.type)}
-                    </TableCell>
-                    <TableCell className="w-20">
-                      {severity && <SeverityBadge severity={severity} />}
-                    </TableCell>
-                    <TableCell className="text-sm">{summarizeLiveEvent(event)}</TableCell>
-                    <TableCell className="w-28 text-xs text-muted-foreground">
-                      {formatDistanceToNowStrict(new Date(event.receivedAt), { addSuffix: true })}
-                    </TableCell>
-                    <TableCell className="w-32">
-                      {detection && (
-                        <AckButton
-                          detectionType={detection.detectionType}
-                          detectionRef={detection.detectionRef}
-                        />
-                      )}
-                    </TableCell>
-                  </TableRow>
-                )
-              })
+              events.map((event) => <LiveEventRow key={liveEventKey(event)} event={event} />)
             )}
           </TableBody>
         </Table>

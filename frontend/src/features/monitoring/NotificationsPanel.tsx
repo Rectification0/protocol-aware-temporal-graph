@@ -1,5 +1,6 @@
 import { formatDistanceToNowStrict } from 'date-fns'
 import { Bell } from 'lucide-react'
+import { useMemo } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -15,7 +16,7 @@ import {
   filterEnabledAlertEvents,
   summarizeLiveEvent,
 } from '@/features/monitoring/logic'
-import { useLiveStreamStore } from '@/store/liveStreamStore'
+import { liveEventKey, useLiveStreamStore } from '@/store/liveStreamStore'
 import { useNotificationSettingsStore } from '@/store/notificationSettingsStore'
 import { useNotificationsStore } from '@/store/notificationsStore'
 
@@ -41,8 +42,16 @@ export function NotificationsPanel() {
   // narrows it.
   const enabledSeverities = useNotificationSettingsStore((state) => state.enabledSeverities)
 
-  const alerts = filterEnabledAlertEvents(events, enabledSeverities).slice(0, MAX_RECENT_ALERTS)
-  const unreadCount = countUnreadEnabledAlerts(events, lastReadAt, enabledSeverities)
+  // F16.6: this bell lives in the Navbar and re-renders on every live
+  // event; memoized so unrelated re-renders don't re-filter up to 200 events.
+  const alerts = useMemo(
+    () => filterEnabledAlertEvents(events, enabledSeverities).slice(0, MAX_RECENT_ALERTS),
+    [events, enabledSeverities],
+  )
+  const unreadCount = useMemo(
+    () => countUnreadEnabledAlerts(events, lastReadAt, enabledSeverities),
+    [events, lastReadAt, enabledSeverities],
+  )
 
   return (
     <DropdownMenu onOpenChange={(open) => open && markAllRead()}>
@@ -65,11 +74,11 @@ export function NotificationsPanel() {
         {alerts.length === 0 ? (
           <p className="px-2 py-3 text-center text-sm text-muted-foreground">No alerts yet.</p>
         ) : (
-          alerts.map((event, index) => {
+          alerts.map((event) => {
             const detection = detectionRefFor(event)
             return (
               <div
-                key={`${event.receivedAt}-${index}`}
+                key={liveEventKey(event)}
                 className="space-y-1 border-b border-border px-2 py-2 last:border-b-0"
               >
                 <p className="text-sm">{summarizeLiveEvent(event)}</p>

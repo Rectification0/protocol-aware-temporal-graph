@@ -28,6 +28,24 @@ interface LiveStreamState {
   clear: () => void
 }
 
+// F16.6: a stable React key per event. The feed is newest-first and
+// prepends on every push, so an index-based key shifts on every event and
+// remounts every row; `receivedAt` alone can collide within a millisecond.
+// Event objects keep their identity across pushes (`[event, ...events]`
+// copies references), so a WeakMap from object to sequence number gives a
+// key that is stable, unique, and needs no change to the event shape.
+const eventKeys = new WeakMap<LiveStreamEvent, string>()
+let nextEventKey = 0
+
+export function liveEventKey(event: LiveStreamEvent): string {
+  let key = eventKeys.get(event)
+  if (key === undefined) {
+    key = `live-${nextEventKey++}`
+    eventKeys.set(event, key)
+  }
+  return key
+}
+
 export const useLiveStreamStore = create<LiveStreamState>((set) => ({
   status: 'idle',
   events: [],
