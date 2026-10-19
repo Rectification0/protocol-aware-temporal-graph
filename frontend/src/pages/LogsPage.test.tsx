@@ -168,4 +168,15 @@ describe('LogsPage (Milestone F11 Log Explorer)', () => {
     // No extra fetch was triggered just by the live event arriving.
     expect(vi.mocked(listAuditLog).mock.calls.length).toBe(callsBeforeLiveEvent)
   })
+
+  it('reports a failed fetch instead of claiming no records match (F16.9)', async () => {
+    vi.mocked(listAuditLog).mockRejectedValue(new Error('audit file unreadable'))
+
+    render(<LogsPage />, { wrapper })
+
+    const notice = await screen.findByRole('alert')
+    expect(notice).toHaveTextContent('Audit log unavailable: audit file unreadable')
+    expect(screen.getByText('Unable to load the audit log.')).toBeInTheDocument()
+    expect(screen.queryByText('No log records match the current filters.')).not.toBeInTheDocument()
+  })
 })

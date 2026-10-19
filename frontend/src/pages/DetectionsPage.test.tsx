@@ -146,4 +146,39 @@ describe('DetectionsPage (Milestone F9 Detection Matrix)', () => {
 
     expect(await screen.findByText('No detections match the current filters.')).toBeInTheDocument()
   })
+
+  it('keeps motif rows but names the failed source when anomaly scores fail (F16.9)', async () => {
+    mockData({
+      completions: [
+        {
+          id: 1,
+          motif_name: 'lateral_pivot',
+          chain_key: 'Machine:C1042',
+          matched_edges: ['e1'],
+          completed_at: 1_700_000_000,
+          confidence: 1,
+        },
+      ],
+    })
+    vi.mocked(listEntityScores).mockRejectedValue(new Error('scores endpoint down'))
+
+    render(<DetectionsPage />, { wrapper })
+
+    const notice = await screen.findByRole('alert')
+    expect(notice).toHaveTextContent('Anomaly scores unavailable: scores endpoint down')
+    expect(notice).toHaveTextContent('not a complete list')
+    expect(await screen.findByText('lateral_pivot')).toBeInTheDocument()
+  })
+
+  it('says it could not load, not "no matches", when every row source fails (F16.9)', async () => {
+    mockData()
+    vi.mocked(listMotifCompletions).mockRejectedValue(new Error('down'))
+    vi.mocked(listEntityScores).mockRejectedValue(new Error('down'))
+
+    render(<DetectionsPage />, { wrapper })
+
+    expect(await screen.findByText('Unable to load detections.')).toBeInTheDocument()
+    expect(screen.queryByText('No detections match the current filters.')).not.toBeInTheDocument()
+    expect(screen.getByRole('alert')).not.toHaveTextContent('not a complete list')
+  })
 })

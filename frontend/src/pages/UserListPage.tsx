@@ -2,7 +2,9 @@ import { useMemo, useState } from 'react'
 import type { ColumnDef, PaginationState } from '@tanstack/react-table'
 import { Link } from 'react-router-dom'
 import { DataTable } from '@/components/data-table'
+import { LoadErrorNotice } from '@/components/load-error-notice'
 import { SearchBar } from '@/components/search-bar'
+import { SectionErrorBoundary } from '@/components/section-error-boundary'
 import { investigationPath } from '@/config/routes'
 import { useEntities } from '@/hooks/api'
 
@@ -53,15 +55,18 @@ export function Component() {
         placeholder="Search users..."
         className="max-w-sm"
       />
-      <DataTable
-        columns={columns}
-        data={filteredRows}
-        loading={entities.isLoading}
-        emptyMessage={
-          entities.isError ? 'Unable to load users.' : 'No users match the current search.'
-        }
-        getRowId={(id) => id}
-      />
+      <LoadErrorNotice failures={[entities.isError && { label: 'Users', error: entities.error }]} />
+      <SectionErrorBoundary label="Users table" resetKey={search}>
+        <DataTable
+          columns={columns}
+          data={filteredRows}
+          loading={entities.isLoading}
+          emptyMessage={
+            entities.isError ? 'Unable to load users.' : 'No users match the current search.'
+          }
+          getRowId={(id) => id}
+        />
+      </SectionErrorBoundary>
     </section>
   )
 }

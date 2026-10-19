@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react'
 import type { PaginationState } from '@tanstack/react-table'
 import { DataTable } from '@/components/data-table'
 import { FilterBar, type FilterChipData } from '@/components/filter-bar'
+import { LoadErrorNotice } from '@/components/load-error-notice'
+import { SectionErrorBoundary } from '@/components/section-error-boundary'
 import type { FeedbackDisposition, ThreatSeverity } from '@/components/severity-badge'
 import {
   Select,
@@ -52,6 +54,8 @@ export function Component() {
   const [filters, setFilters] = useState<DetectionFilters>(EMPTY_DETECTION_FILTERS)
 
   const isLoading = completions.isLoading || scores.isLoading || feedback.isLoading
+  // Dispositions only annotate rows, so "all failed" means both row sources.
+  const allFailed = completions.isError && scores.isError
   const rows = useMemo(
     () => buildDetectionRows(completions.rows, scores.rows, feedback.rows),
     [completions.rows, scores.rows, feedback.rows],
@@ -151,13 +155,30 @@ export function Component() {
         </Select>
       </FilterBar>
 
-      <DataTable
-        columns={detectionColumns}
-        data={filteredRows}
-        loading={isLoading}
-        emptyMessage="No detections match the current filters."
-        getRowId={(row) => row.id}
+      <LoadErrorNotice
+        failures={[
+          completions.isError && { label: 'Motif detections', error: completions.error },
+          scores.isError && { label: 'Anomaly scores', error: scores.error },
+          feedback.isError && { label: 'Analyst dispositions', error: feedback.error },
+        ]}
+        partial={
+          allFailed ? undefined : 'Showing only the data that did load -- not a complete list.'
+        }
       />
+
+      {/* F16.9: contains a cell-renderer crash to the table (filters stay
+          usable); changing a filter retries. */}
+      <SectionErrorBoundary label="Detections table" resetKey={JSON.stringify(filters)}>
+        <DataTable
+          columns={detectionColumns}
+          data={filteredRows}
+          loading={isLoading}
+          emptyMessage={
+            allFailed ? 'Unable to load detections.' : 'No detections match the current filters.'
+          }
+          getRowId={(row) => row.id}
+        />
+      </SectionErrorBoundary>
     </section>
   )
 }

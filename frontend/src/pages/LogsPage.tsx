@@ -2,7 +2,9 @@ import { useMemo, useState } from 'react'
 import type { PaginationState } from '@tanstack/react-table'
 import { DataTable } from '@/components/data-table'
 import { FilterBar, type FilterChipData } from '@/components/filter-bar'
+import { LoadErrorNotice } from '@/components/load-error-notice'
 import { SearchBar } from '@/components/search-bar'
+import { SectionErrorBoundary } from '@/components/section-error-boundary'
 import { TimeRangeFilter } from '@/components/time-range-filter'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -214,18 +216,36 @@ export function Component() {
         </span>
       </div>
 
-      <DataTable
-        columns={createLogColumns(setRawLogRow)}
-        data={displayRows}
-        loading={auditLog.isLoading}
-        emptyMessage="No log records match the current filters."
-        getRowId={(row) => row.key}
-        pageCount={auditLog.pageCount}
-        pagination={pagination}
-        onPaginationChange={setPagination}
+      <LoadErrorNotice
+        failures={[auditLog.isError && { label: 'Audit log', error: auditLog.error }]}
+        partial={rows.length > 0 ? 'Showing the last page that loaded successfully.' : undefined}
       />
 
-      <RawLogDialog row={rawLogRow} onOpenChange={(open) => !open && setRawLogRow(null)} />
+      {/* F16.9: a cell renderer crashing on one malformed record contains to
+          the table; changing any filter or page retries it. */}
+      <SectionErrorBoundary
+        label="Log table"
+        resetKey={`${pagination.pageIndex}|${pagination.pageSize}|${type}|${entity}|${query}|${range.start}|${range.end}`}
+      >
+        <DataTable
+          columns={createLogColumns(setRawLogRow)}
+          data={displayRows}
+          loading={auditLog.isLoading}
+          emptyMessage={
+            auditLog.isError
+              ? 'Unable to load the audit log.'
+              : 'No log records match the current filters.'
+          }
+          getRowId={(row) => row.key}
+          pageCount={auditLog.pageCount}
+          pagination={pagination}
+          onPaginationChange={setPagination}
+        />
+      </SectionErrorBoundary>
+
+      <SectionErrorBoundary label="Raw log record" resetKey={rawLogRow?.key}>
+        <RawLogDialog row={rawLogRow} onOpenChange={(open) => !open && setRawLogRow(null)} />
+      </SectionErrorBoundary>
     </section>
   )
 }
