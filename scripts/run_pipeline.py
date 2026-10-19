@@ -73,6 +73,7 @@ from t_gnn.adaptive_calibration import AdaptiveDecayCalibrator  # noqa: E402
 from t_gnn.api_state import ApiStateWriter, create_api_tables  # noqa: E402
 from t_gnn.audit import AuditLogger, FileAuditSink  # noqa: E402
 from t_gnn.cold_storage import BufferedColdStorageWriter, Neo4jColdStorageWriter, Neo4jConfig  # noqa: E402
+from t_gnn.config_writer import ConfigFileWatcher  # noqa: E402
 from t_gnn.data.simulate_traffic import (  # noqa: E402
     inject_admin_share_escalation,
     inject_lateral_pivot,
@@ -204,6 +205,9 @@ def main() -> None:
     parser.add_argument("--no-api-persist", action="store_true",
                          help="disable writing to the frontend API layer's Postgres tables (tasks.md F0) -- "
                               "on by default, degrades gracefully (a warning, not a crash) if Postgres is unreachable")
+    parser.add_argument("--config-reload-interval", type=float, default=2.0,
+                         help="seconds between checks for edits to config/protocols.yaml + motifs.yaml "
+                              "(hot reload, Frontend Backlog FB.1); 0 disables")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-ticks", type=int, default=None, help="synthetic mode only: stop after N ticks instead of running until Ctrl+C")
     args = parser.parse_args()
@@ -264,8 +268,9 @@ def main() -> None:
         if args.shards > 1
         else RedisMotifStateStore(redis_clients[0])
     )
+    motif_registry = MotifRegistry()
     motif_engine = MotifEngine(
-        definitions=MotifRegistry().all(),
+        definitions=motif_registry.all(),
         state_store=motif_state_store,
         alert_bus=alert_bus,
         prune_event_bus=prune_bus,
@@ -352,11 +357,28 @@ def main() -> None:
             f"redis_available={motif_engine.available}"
         )
 
+    # Frontend Backlog FB.1: pick up config edits (the dashboard's, or by hand)
+    # without a restart. The decay engine reads `registry` live, so a protocol
+    # reload applies to the next edge -- and replaces any in-memory
+    # AdaptiveDecayCalibrator values with the file's (the file wins). Motif
+    # definitions are a list the engine holds, so they're swapped in; chains
+    # already in progress keep the TTL they were written with, new writes use
+    # the new window.
+    config_watcher = ConfigFileWatcher(
+        registry, motif_registry,
+        on_motifs_reloaded=lambda reloaded: setattr(motif_engine, "definitions", reloaded.all()),
+    )
+    next_config_check = time.monotonic() + args.config_reload_interval
+
     try:
         for edge in edge_stream:
             tick += 1
             _process_edge(edge)
             sim_t = edge.t_e
+
+            if args.config_reload_interval > 0 and time.monotonic() >= next_config_check:
+                config_watcher.check()
+                next_config_check = time.monotonic() + args.config_reload_interval
 
             if tick % args.metrics_every == 0:
                 _run_metrics_pass(sim_t)

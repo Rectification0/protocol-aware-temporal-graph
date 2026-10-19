@@ -141,6 +141,21 @@ _DDL_STATEMENTS = (
         notes TEXT
     )
     """,
+    # Frontend Backlog FB.1: audit trail of dashboard-made detection-config
+    # edits (config_writer.py). The YAML file is the source of truth for the
+    # *value*; this is the record of who changed it, when, and from what.
+    """
+    CREATE TABLE IF NOT EXISTS config_changes (
+        id SERIAL PRIMARY KEY,
+        kind TEXT NOT NULL,
+        target TEXT NOT NULL,
+        field TEXT NOT NULL,
+        old_value DOUBLE PRECISION NOT NULL,
+        new_value DOUBLE PRECISION NOT NULL,
+        changed_by INTEGER REFERENCES users(id),
+        changed_at DOUBLE PRECISION NOT NULL
+    )
+    """,
 )
 
 
@@ -204,6 +219,18 @@ class AlertAcknowledgementRecord:
     acknowledged_by: Optional[str]
     acknowledged_at: float
     notes: Optional[str]
+
+
+@dataclass(frozen=True)
+class ConfigChangeRecord:
+    id: int
+    kind: str
+    target: str
+    field: str
+    old_value: float
+    new_value: float
+    changed_by: Optional[str]
+    changed_at: float
 
 
 @dataclass(frozen=True)
@@ -402,6 +429,40 @@ class ApiStateWriter:
                 )
 
         self._execute(_run)
+
+    def ping(self) -> bool:
+        """True if Postgres is reachable right now. FB.1 checks this *before*
+        writing a config file, so a config change is never made while its
+        audit row can't be written."""
+
+        def _run(conn: "psycopg2.extensions.connection") -> None:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+
+        self._execute(_run)
+        return self.available
+
+    def record_config_change(
+        self, kind: str, target: str, field: str, old_value: float, new_value: float,
+        analyst: Optional[str], t: float,
+    ) -> bool:
+        """FB.1's audit row for a dashboard config edit; returns whether it
+        was persisted. Called directly by the config-write endpoints (no
+        bus -- it originates in the API layer, like F13.6's acks)."""
+        analyst_id = self.get_or_create_user(analyst) if analyst else None
+
+        def _run(conn: "psycopg2.extensions.connection") -> None:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO config_changes (kind, target, field, old_value, new_value, changed_by, changed_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (kind, target, field, old_value, new_value, analyst_id, t),
+                )
+
+        self._execute(_run)
+        return self.available
 
 
 def _time_range_conditions(column: str, start: Optional[float], end: Optional[float]) -> tuple[list[str], list]:
@@ -674,6 +735,26 @@ class ApiStateReader:
                 rows = cur.fetchall()
         return [
             AlertAcknowledgementRecord(id=r[0], detection_type=r[1], detection_ref=r[2], acknowledged_by=r[3], acknowledged_at=r[4], notes=r[5])
+            for r in rows
+        ]
+
+    def list_config_changes(self, limit: int = 50, offset: int = 0) -> list[ConfigChangeRecord]:
+        with self._connection_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT c.id, c.kind, c.target, c.field, c.old_value, c.new_value, u.username, c.changed_at
+                    FROM config_changes c LEFT JOIN users u ON u.id = c.changed_by
+                    ORDER BY c.changed_at DESC, c.id DESC LIMIT %s OFFSET %s
+                    """,
+                    (limit, offset),
+                )
+                rows = cur.fetchall()
+        return [
+            ConfigChangeRecord(
+                id=r[0], kind=r[1], target=r[2], field=r[3], old_value=r[4], new_value=r[5],
+                changed_by=r[6], changed_at=r[7],
+            )
             for r in rows
         ]
 

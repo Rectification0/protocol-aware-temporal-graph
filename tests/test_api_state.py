@@ -12,7 +12,7 @@ from t_gnn.tgnn import InferenceResult, InferenceResultBus
 
 _TABLES = (
     "motif_feedback", "alert_acknowledgements", "motif_completions",
-    "motif_resets", "entity_scores", "metrics_snapshots", "users",
+    "motif_resets", "entity_scores", "metrics_snapshots", "config_changes", "users",
 )
 
 
@@ -396,3 +396,20 @@ def test_writer_degrades_gracefully_when_postgres_unreachable():
     writer.record_metrics_snapshot(snapshot, t=time.time())
 
     assert writer.available is False
+
+
+@requires_postgres
+def test_config_change_round_trip_with_attribution():
+    """Frontend Backlog FB.1's audit trail."""
+    writer = ApiStateWriter(get_connection)
+    reader = ApiStateReader(get_connection)
+
+    assert writer.ping() is True
+    assert writer.record_config_change("protocol", "SMB", "lambda_p", 0.000004, 0.00002, "alice", 100.0)
+    assert writer.record_config_change("motif", "lateral_pivot", "window_seconds", 14400, 7200, None, 200.0)
+
+    records = reader.list_config_changes(limit=10)
+    assert [(r.target, r.old_value, r.new_value, r.changed_by) for r in records] == [
+        ("lateral_pivot", 14400, 7200, None),
+        ("SMB", 0.000004, 0.00002, "alice"),
+    ]

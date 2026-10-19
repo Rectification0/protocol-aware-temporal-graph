@@ -6,6 +6,7 @@ export function endpointMockFactory() {
   return {
     acknowledgeAlert: vi.fn(),
     getAlertResponseTime: vi.fn(),
+    getConfigCapabilities: vi.fn(),
     getEntityForensics: vi.fn(),
     getEntityScore: vi.fn(),
     getHealth: vi.fn(),
@@ -13,6 +14,7 @@ export function endpointMockFactory() {
     getPilotReport: vi.fn(),
     getPrunedEdge: vi.fn(),
     listAuditLog: vi.fn(),
+    listConfigChanges: vi.fn(),
     listEntities: vi.fn(),
     listEntityScores: vi.fn(),
     listMotifCompletions: vi.fn(),
@@ -21,5 +23,7 @@ export function endpointMockFactory() {
     listMotifResets: vi.fn(),
     listProtocolConfig: vi.fn(),
     submitMotifFeedback: vi.fn(),
+    updateMotifWindow: vi.fn(),
+    updateProtocolLambda: vi.fn(),
   }
 }

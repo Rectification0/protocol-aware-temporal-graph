@@ -6,6 +6,13 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('@/api/endpoints', () => ({
   listProtocolConfig: vi.fn().mockResolvedValue([]),
   listMotifConfig: vi.fn().mockResolvedValue([]),
+  getConfigCapabilities: vi.fn().mockResolvedValue({
+    writes_enabled: false,
+    min_lambda_p: 1e-8,
+    max_lambda_p: 0.01,
+    min_window_seconds: 60,
+    max_window_seconds: 2592000,
+  }),
 }))
 
 const { Component: SettingsPage } = await import('@/pages/SettingsPage')

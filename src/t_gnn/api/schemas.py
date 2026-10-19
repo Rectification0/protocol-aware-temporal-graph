@@ -121,6 +121,39 @@ class MotifConfigOut(BaseModel):
     steps: list[MotifStepOut]
 
 
+class ConfigCapabilitiesOut(BaseModel):
+    """FB.1: whether this API instance accepts config edits
+    (`API_CONFIG_WRITES_ENABLED`), plus the validation bounds, so the
+    Settings form can stay read-only/validate client-side without guessing."""
+
+    writes_enabled: bool
+    min_lambda_p: float
+    max_lambda_p: float
+    min_window_seconds: int
+    max_window_seconds: int
+
+
+class ProtocolLambdaIn(BaseModel):
+    lambda_p: float
+    analyst: Optional[str] = None
+
+
+class MotifWindowIn(BaseModel):
+    window_seconds: int
+    analyst: Optional[str] = None
+
+
+class ConfigChangeOut(BaseModel):
+    id: Optional[int] = None
+    kind: str
+    target: str
+    field: str
+    old_value: float
+    new_value: float
+    changed_by: Optional[str]
+    changed_at: float
+
+
 class AuditRecordOut(BaseModel):
     """Mirrors `audit.py`'s two record shapes (`log_prune`/`log_motif_reset`)
     -- fields not applicable to a given `type` are `None` rather than the

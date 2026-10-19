@@ -24,6 +24,9 @@ export const queryKeys = {
   prunedEdge: (edgeId: string) => ['forensics', 'edge', edgeId] as const,
   protocolConfig: () => ['config', 'protocols'] as const,
   motifConfig: () => ['config', 'motifs'] as const,
+  configCapabilities: () => ['config', 'capabilities'] as const,
+  configChanges: (params: { limit: number; offset: number }) =>
+    ['config', 'changes', params] as const,
   auditLog: (params: {
     limit: number
     offset: number

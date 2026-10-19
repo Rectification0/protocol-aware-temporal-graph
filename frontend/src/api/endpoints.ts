@@ -5,6 +5,8 @@ import type {
   AlertResponseTimeOut,
   AuditRecordOut,
   AuditRecordType,
+  ConfigCapabilitiesOut,
+  ConfigChangeOut,
   EntityScoreOut,
   HealthOut,
   MotifCompletionOut,
@@ -12,9 +14,11 @@ import type {
   MotifFeedbackIn,
   MotifFeedbackOut,
   MotifResetOut,
+  MotifWindowIn,
   Paginated,
   PilotReportOut,
   ProtocolConfigOut,
+  ProtocolLambdaIn,
   PrunedEdgeOut,
 } from '@/types/api'
 
@@ -121,6 +125,33 @@ export function listProtocolConfig(signal?: AbortSignal) {
 
 export function listMotifConfig(signal?: AbortSignal) {
   return apiRequest<MotifConfigOut[]>('/api/config/motifs', { signal })
+}
+
+// FB.1: config writes -- 403 unless the API runs with
+// API_CONFIG_WRITES_ENABLED; `getConfigCapabilities` says which up front.
+export function getConfigCapabilities(signal?: AbortSignal) {
+  return apiRequest<ConfigCapabilitiesOut>('/api/config/capabilities', { signal })
+}
+
+export function listConfigChanges({ limit, offset, signal }: PageParams = {}) {
+  return apiRequest<Paginated<ConfigChangeOut>>('/api/config/changes', {
+    query: { limit, offset },
+    signal,
+  })
+}
+
+export function updateProtocolLambda(protocol: string, body: ProtocolLambdaIn) {
+  return apiRequest<ConfigChangeOut>(`/api/config/protocols/${encodeURIComponent(protocol)}`, {
+    method: 'PUT',
+    body,
+  })
+}
+
+export function updateMotifWindow(name: string, body: MotifWindowIn) {
+  return apiRequest<ConfigChangeOut>(`/api/config/motifs/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    body,
+  })
 }
 
 // F11.1/F11.2: `until` mirrors F8.1's `start`/`end` bound naming (adapted

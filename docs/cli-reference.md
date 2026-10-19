@@ -614,6 +614,7 @@ python scripts/run_pipeline.py --source replay --staged-dir data/lanl/simulated/
 | `--shards` | `1` | Use N shards for the graph store + motif cache (`N=1` is the plain path) |
 | `--adaptive-calibration` | off | Enable `AdaptiveDecayCalibrator` |
 | `--audit-log` | `logs/audit.log` | Where structured audit records are written |
+| `--config-reload-interval` | `2.0` | Seconds between checks for edits to `config/protocols.yaml`/`config/motifs.yaml`. Changed files are hot-reloaded (logged `CONFIG RELOADED`; a broken file is reported and the last good config kept). `0` disables |
 | `--seed` | `42` | RNG seed (synthetic mode) |
 | `--max-ticks` | *(none)* | Synthetic mode only: stop after N ticks instead of running until Ctrl+C |
 
@@ -661,7 +662,10 @@ python -m t_gnn.api --reload
 (F17.3) is a comma-separated list of exact origins allowed to call the API
 cross-origin. Unset, it defaults to the Vite dev server
 (`http://localhost:5173`, `http://127.0.0.1:5173`). Empty means none. `*` is
-rejected.
+rejected. `API_CONFIG_WRITES_ENABLED=true` (Frontend Backlog FB.1, off by
+default) lets the dashboard edit detection thresholds. Every edit is
+written to `config/*.yaml` (which `run_pipeline` hot-reloads) and audited
+in Postgres. With the flag off, those endpoints answer 403.
 
 **Output**: standard uvicorn access logs. Sanity-check it's up and has
 data with `curl http://127.0.0.1:8000/api/health` and

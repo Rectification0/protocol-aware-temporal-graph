@@ -45,6 +45,20 @@ one against the same `config_path`) to re-read the file from disk without
 restarting anything — no code change or redeploy needed to correct a value
 (FR1.3). `DecayEngine` and `MotifStep`'s structural matching don't cache
 `lambda_p`; every `weight_at()` call queries the registry live.
+`scripts/run_pipeline.py` does this automatically when the file changes
+(`ConfigFileWatcher`, `--config-reload-interval`).
+
+**Dashboard edits** (`frontend_implementation` branch, FB.1,
+`src/t_gnn/config_writer.py`): when the API runs with
+`API_CONFIG_WRITES_ENABLED=true`, Settings can change a protocol's
+`lambda_p` (entered as a half-life) or a motif's `window_seconds`. The
+writer edits only that value's line and rewrites `half_life_hours` to
+match, so the derived figure never goes stale. It keeps all comments and
+appends a `set via dashboard by <analyst>, <time> (was <old>)` note. It
+then re-parses the result and refuses the write if anything else would
+change. Accepted ranges are a **half-life from 1 minute to 365 days** and a
+**window from 60 s to 30 days**. These are sanity rails against certain
+mistakes, not tuning advice.
 
 ## ε (epsilon) tuning — `EpsilonController` (`src/t_gnn/pruning.py`)
 

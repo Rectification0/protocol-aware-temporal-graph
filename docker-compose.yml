@@ -104,10 +104,17 @@ services:
       PILOT_REPORT_PATH: /data/logs/pilot-report.json
       # Same-origin via the frontend's proxy -- no cross-origin callers.
       API_CORS_ORIGINS: ${API_CORS_ORIGINS:-}
+      # Frontend Backlog FB.1: dashboard threshold edits, off unless set
+      # (e.g. in .env). They write the mounted ./config below -- the same
+      # files the host's run_pipeline.py hot-reloads.
+      API_CONFIG_WRITES_ENABLED: ${API_CONFIG_WRITES_ENABLED:-false}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./logs:/data/logs:ro
+      # The host's config, not the copy baked into the image: reads show
+      # what the pipeline actually runs, and FB.1 writes reach it.
+      - ./config:/app/config
     depends_on:
       - neo4j
       - redis

@@ -25,6 +25,7 @@ from fastapi import HTTPException
 import t_gnn.db  # noqa: F401 -- side effect: loads .env into os.environ
 from t_gnn.api_state import ApiStateReader, ApiStateWriter
 from t_gnn.cold_storage import Neo4jConfig
+from t_gnn.config_writer import ConfigWriter
 from t_gnn.db import get_connection
 from t_gnn.forensics import Neo4jForensicQueryAPI
 from t_gnn.motifs import MotifRegistry
@@ -101,6 +102,18 @@ def get_protocol_registry() -> ProtocolDecayRegistry:
 @lru_cache(maxsize=1)
 def get_motif_registry() -> MotifRegistry:
     return MotifRegistry()
+
+
+def config_writes_enabled() -> bool:
+    """FB.1's gate: dashboard config edits are off unless an operator opts
+    in. Until F0.11 gives the API real identities, *this* is the
+    authorization decision (decided with the developer, 2026-10-19)."""
+    return os.environ.get("API_CONFIG_WRITES_ENABLED", "").strip().lower() in ("1", "true", "yes")
+
+
+@lru_cache(maxsize=1)
+def get_config_writer() -> ConfigWriter:
+    return ConfigWriter()
 
 
 @lru_cache(maxsize=1)

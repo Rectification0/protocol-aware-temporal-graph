@@ -50,6 +50,16 @@ export function mockAllEndpoints() {
   m.getPrunedEdge.mockRejectedValue(new Error('not found'))
   m.acknowledgeAlert.mockResolvedValue({} as never)
   m.submitMotifFeedback.mockResolvedValue({} as never)
+  m.getConfigCapabilities.mockResolvedValue({
+    writes_enabled: false,
+    min_lambda_p: 1e-8,
+    max_lambda_p: 0.01,
+    min_window_seconds: 60,
+    max_window_seconds: 2592000,
+  })
+  m.listConfigChanges.mockResolvedValue(emptyPage)
+  m.updateProtocolLambda.mockRejectedValue(new Error('writes disabled'))
+  m.updateMotifWindow.mockRejectedValue(new Error('writes disabled'))
   return m
 }
 

@@ -288,7 +288,10 @@ A `/settings` page, no backend changes -- every setting is either a
 client-side preference or a read-only view of an already-existing
 endpoint. `src/features/settings/`: `ThemeSection` (F15.1), `NotificationSection`
 (F15.2), `ApiConfigSection` (F15.3, read-only), `AlertThresholdsSection`
-(F15.5, read-only tables over F0.9's `/api/config/protocols`/`/api/config/motifs`).
+(F15.5, tables over F0.9's `/api/config/protocols`/`/api/config/motifs`; read-only unless the API runs with
+`API_CONFIG_WRITES_ENABLED=true`, in which case Frontend Backlog FB.1's inline `ThresholdEditor` edits a
+protocol's half-life or a motif's window -- written to config/*.yaml, hot-reloaded by the pipeline, audited
+and listed under "Recent changes").
 F15.4 reuses Milestone F13.3's `AutoRefreshControl` directly rather than a
 second control. Three preferences persist across reloads (F15.6) via
 `zustand/middleware`'s `persist` (`localStorage`, keys prefixed `t-gnn-`):

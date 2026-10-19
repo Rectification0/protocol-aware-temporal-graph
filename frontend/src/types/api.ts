@@ -115,6 +115,36 @@ export interface MotifConfigOut {
   steps: MotifStepOut[]
 }
 
+// Frontend Backlog FB.1: config write path (`api/routers/config.py`).
+export interface ConfigCapabilitiesOut {
+  writes_enabled: boolean
+  min_lambda_p: number
+  max_lambda_p: number
+  min_window_seconds: number
+  max_window_seconds: number
+}
+
+export interface ProtocolLambdaIn {
+  lambda_p: number
+  analyst?: string | null
+}
+
+export interface MotifWindowIn {
+  window_seconds: number
+  analyst?: string | null
+}
+
+export interface ConfigChangeOut {
+  id: number | null
+  kind: 'protocol' | 'motif'
+  target: string
+  field: 'lambda_p' | 'window_seconds'
+  old_value: number
+  new_value: number
+  changed_by: string | null
+  changed_at: number
+}
+
 export type AuditRecordType = 'prune' | 'motif_reset'
 
 export interface AuditRecordOut {

@@ -24,10 +24,25 @@ field-by-field reference on any config surface mentioned below, see
 3. **Edit `config/protocols.yaml`** with the corrected `lambda_p` (and
    update `half_life_hours`/`description` for the next person, even though
    they're not machine-read).
-4. **Hot-reload, no redeploy** (FR1.3): call `registry.reload()` on the
-   running process's `ProtocolDecayRegistry` instance, or restart the
-   process if it constructs a fresh one from the same `config_path` on
-   startup — either way, no code change.
+4. **Hot-reload, no redeploy** (FR1.3): `scripts/run_pipeline.py` watches
+   `config/protocols.yaml` and `config/motifs.yaml` and reloads them on
+   its own within `--config-reload-interval` seconds (default 2), logging
+   `CONFIG RELOADED <file>`. A file that fails to load logs `CONFIG RELOAD
+   FAILED` and the pipeline keeps its last good config. Any other process
+   holding a `ProtocolDecayRegistry` can call `registry.reload()` itself.
+   A reload replaces any in-memory `AdaptiveDecayCalibrator` (B.3) values
+   with the file's values, because the file wins.
+
+   **Or edit from the dashboard** (`frontend_implementation` branch,
+   Frontend Backlog FB.1). Go to Settings → Alert thresholds and edit the
+   protocol's half-life. This works only when the API runs with
+   `API_CONFIG_WRITES_ENABLED=true` (off by default). The API validates the
+   value, rewrites only the `lambda_p`/`half_life_hours` lines (keeping
+   every comment, with a note of who changed it and the old value),
+   verifies the result loads, writes it atomically, and records the change
+   in Postgres (`config_changes`). The pipeline then hot-reloads it as
+   above. Hand edits and dashboard edits coexist, because the file is the
+   only source of truth.
 5. **Verify**: `pytest tests/test_decay.py tests/test_protocol_registry.py`
    still pass, and watch the prune rate/audit log return to baseline over
    the next few minutes.
@@ -43,7 +58,14 @@ expressible as an ordered sequence of typed edge-pattern steps chained by
    `config/schema/motif.schema.json`, or just run the reload step below —
    it validates for you and raises `jsonschema.ValidationError` on a bad
    shape).
-2. Call `MotifRegistry.reload()` (or restart the process) — no redeploy.
+2. Nothing else to do for `run_pipeline.py`: it hot-reloads
+   `config/motifs.yaml` within a couple of seconds and swaps the new
+   definitions into its `MotifEngine` (see the λ_p step above). Elsewhere,
+   call `MotifRegistry.reload()` or restart the process — no redeploy.
+   Changing an *existing* motif's `window_seconds` can also be done from
+   the dashboard (FB.1, same gate). Chains already in progress keep the
+   TTL they were written with, and the new window applies from the next
+   write.
 3. Verify: write a quick test (see `tests/test_motifs.py` for the pattern)
    or run a manual replay through `MotifEngine.on_edge()` with synthetic
    edges matching your new steps, confirming a `MotifCompletionEvent`

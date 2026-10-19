@@ -86,6 +86,14 @@ one variable for deployment:
 | Variable | Default | Meaning |
 |---|---|---|
 | `API_CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated exact origins allowed to call the API cross-origin. Empty disables cross-origin access (correct behind the dashboard's proxy). `*` is rejected, because the API accepts analyst-attributed writes. |
+| `API_CONFIG_WRITES_ENABLED` | `false` | Lets the dashboard's Settings page edit detection thresholds (FB.1). Writes go to `config/*.yaml` and are audited in Postgres; when it's off, the edit endpoints answer 403 and Settings stays read-only. **Until real login exists (F0.11), this switch is the whole authorization model.** Enable it only where everyone who can reach the dashboard may retune detection. |
+
+In compose, the API mounts the host's `./config` read-write, so its reads
+show what the host pipeline actually runs, and an edit reaches the
+pipeline's hot reload. To enable edits, set `API_CONFIG_WRITES_ENABLED=true`
+in the root `.env` and recreate the service (`docker compose --profile
+dashboard up -d api`). On a Linux host, the container's non-root user
+(uid 10001) needs write permission on `config/`.
 
 In compose, the pilot report is read from `logs/pilot-report.json`, since only
 `logs/` is mounted. Write it with `python -m t_gnn.pilot ... --output

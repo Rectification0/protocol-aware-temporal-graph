@@ -31,3 +31,8 @@ data/mordor/
 # the repo root before staging) -- root-anchored so it can't shadow anything
 # vendored deeper in the tree.
 /*.zip
+
+# Frontend Backlog FB.1: config_writer.py's transient temp files beside
+# config/*.yaml (atomic-write and verify copies) -- normally removed at once,
+# but never committable if a process dies mid-write.
+/config/.*.yaml.*
