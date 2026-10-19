@@ -7,6 +7,10 @@ import tailwindcss from '@tailwindcss/vite'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // F16.7: `dist/.vite/manifest.json` -- read by scripts/check-bundle.mjs to
+  // verify route-level splitting keeps the initial load small. Not served
+  // (nothing references it), so harmless in a production deploy.
+  build: { manifest: true },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

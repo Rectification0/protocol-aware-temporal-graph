@@ -316,6 +316,7 @@ npm run format:check      # Prettier --check
 npm run test              # Vitest (single run)
 npm run test:watch         # Vitest (watch mode)
 npm run test:coverage      # Vitest + v8 coverage (text summary + coverage/index.html; report-only, no thresholds)
+npm run check:bundle       # build, then verify route splitting: initial JS budget + no page/Recharts/day-picker code in the initial load
 ```
 
 Copy `.env.example` to `.env.local` and point `VITE_API_BASE_URL` at a
