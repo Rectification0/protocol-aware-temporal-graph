@@ -29,6 +29,9 @@ RUN apt-get update \
     && wget -q -P /opt/flink/lib \
        "https://repo1.maven.org/maven2/org/apache/flink/flink-sql-connector-kafka/${KAFKA_CONNECTOR_VERSION}/flink-sql-connector-kafka-${KAFKA_CONNECTOR_VERSION}.jar"
 
+# Owned by the flink user, so the named volume mounted here inherits that.
+RUN mkdir -p /opt/flink/checkpoints && chown flink:flink /opt/flink/checkpoints
+
 # Same layout as the source tree (protocol_registry.py/schema.py resolve
 # config/ as parents[2] of the module), so /opt/t_gnn/src + /opt/t_gnn/config.
 COPY src/t_gnn /opt/t_gnn/src/t_gnn

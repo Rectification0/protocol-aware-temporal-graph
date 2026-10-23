@@ -95,7 +95,17 @@ baseline in-process unless it's started with `--decay-backend flink`.
    investigate. A watermark
    stuck at `-9223372036854775808` means no timestamped edge has arrived
    yet.
-7. **Taskmanager died with `OutOfMemoryError: Metaspace`?** That happened
+7. **Job restarting, or output duplicated?** Check the Flink UI's
+   Exceptions and Checkpoints tabs. "Exceeded checkpoint tolerable failure
+   threshold" with "Size of the state is larger than the maximum permitted
+   memory-backed state" means checkpoints are going to jobmanager memory:
+   `state.checkpoint-storage: filesystem` is missing from `FLINK_PROPERTIES`.
+   Each restart replays from the last committed offsets, so output is
+   duplicated until it's fixed. A `ClassCastException` naming
+   `[Ljava.lang.Object;` in the `decay` operator means a side output was
+   reintroduced, which crashes in thread mode (see
+   `docs/benchmarks.md`).
+8. **Taskmanager died with `OutOfMemoryError: Metaspace`?** That happened
    during development after a dozen job submissions, before `flink-python`
    moved into `/opt/flink/lib` (`docker/flink.Dockerfile`). If it returns,
    raise `taskmanager.memory.jvm-metaspace.size` in `docker-compose.yml`

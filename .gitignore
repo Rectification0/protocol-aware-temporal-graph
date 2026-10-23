@@ -26,6 +26,7 @@ data/mordor/
 /pilot-report.json
 /calibration-report.json
 /mordor-scores.json
+/bench-report.json
 
 # Downloaded raw dataset archives (e.g. OTRF/Mordor capture .zips dropped at
 # the repo root before staging) -- root-anchored so it can't shadow anything

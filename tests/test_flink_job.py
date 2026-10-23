@@ -1,29 +1,23 @@
 """Backlog B.1: the real Flink decay/baseline job, end to end on the compose stack.
 
-Submits its own copy of the job against throwaway topics (unique per run),
-so its event-time clock -- driven by the test's own edge timestamps -- can't
-touch the long-running `t-gnn-decay-baseline` job, and cancels the job and
-deletes those topics afterwards. Skipped unless Kafka (localhost:9092) and
+Runs its own copy of the job on throwaway topics (`t_gnn.flink.harness.
+IsolatedJob`), so its event-time clock -- driven by the test's own edge
+timestamps -- can't touch the long-running `t-gnn-decay-baseline` job. Skipped unless Kafka (localhost:9092) and
 the Flink REST API (localhost:8081) are up: `docker compose up -d`. Slow-ish
-(~30-60s, mostly job startup).
+(~70s, mostly job startup and the backpressure test).
 """
 
 import json
 import math
-import subprocess
 import threading
 import time
-import urllib.request
-import uuid
-from pathlib import Path
 
 import pytest
 
 confluent_kafka = pytest.importorskip("confluent_kafka", reason="needs the [flink] extra: pip install -e '.[flink]'")
 
-from confluent_kafka.admin import AdminClient  # noqa: E402
-
-from t_gnn.flink.kafka_io import drain, ensure_topics, make_producer, produce_edge, publish_lambdas, tail_consumer  # noqa: E402
+from t_gnn.flink.harness import IsolatedJob, stack_up  # noqa: E402
+from t_gnn.flink.kafka_io import drain, make_producer, produce_edge, publish_lambdas, tail_consumer  # noqa: E402
 from t_gnn.flink.logic import expiry_time, parse_decayed_record  # noqa: E402
 from t_gnn.flink.backpressure import FlinkBackpressureProbe  # noqa: E402
 from t_gnn.cold_storage import InMemoryColdStorageWriter  # noqa: E402
@@ -36,28 +30,12 @@ from t_gnn.streaming import DecayStreamProcessor  # noqa: E402
 
 BOOTSTRAP = "localhost:9092"
 FLINK_URL = "http://localhost:8081"
-REPO_ROOT = Path(__file__).resolve().parents[1]
-JOB_PATH_IN_IMAGE = "/opt/t_gnn/src/t_gnn/flink/decay_job.py"
 T0 = 1_000_000.0  # the test's own event-time origin; its topics see no other clock
 REFRESH_INTERVAL = 60.0
 EXPIRE_BELOW = 0.05
 
 
-def _stack_up() -> bool:
-    try:
-        AdminClient({"bootstrap.servers": BOOTSTRAP}).list_topics(timeout=2)
-        urllib.request.urlopen(f"{FLINK_URL}/overview", timeout=2)
-        return True
-    except Exception:
-        return False
-
-
-pytestmark = pytest.mark.skipif(not _stack_up(), reason="Kafka/Flink not reachable -- run `docker compose up -d` first")
-
-
-def _jobs() -> dict:
-    with urllib.request.urlopen(f"{FLINK_URL}/jobs/overview", timeout=5) as resp:
-        return {j["name"]: j for j in json.load(resp)["jobs"]}
+pytestmark = pytest.mark.skipif(not stack_up(BOOTSTRAP, FLINK_URL), reason="Kafka/Flink not reachable -- run `docker compose up -d` first")
 
 
 class Collector:
@@ -100,41 +78,15 @@ def _edge(src: str, t_e: float, protocol: str = "RDP", w_0: float = 1.0) -> Edge
 
 @pytest.fixture(scope="module")
 def job():
-    uid = uuid.uuid4().hex[:8]
-    topics = {name: f"t-gnn-test-{uid}.{name}" for name in ("edges", "lambdas", "decayed", "weights")}
-    job_name = f"t-gnn-decay-test-{uid}"
-    ensure_topics(BOOTSTRAP, lambdas_topic=topics["lambdas"],
-                  stream_topics=(topics["edges"], topics["decayed"], topics["weights"]))
-    collector = Collector(tail_consumer([topics["decayed"], topics["weights"]], BOOTSTRAP), topics["decayed"])
-
-    subprocess.run(
-        ["docker", "compose", "exec", "-T", "jobmanager", "flink", "run", "-d", "-py", JOB_PATH_IN_IMAGE,
-         "--job-name", job_name, "--edges-from", "earliest",
-         "--edges-topic", topics["edges"], "--lambdas-topic", topics["lambdas"],
-         "--decayed-topic", topics["decayed"], "--weights-topic", topics["weights"],
-         "--refresh-interval", str(REFRESH_INTERVAL), "--expire-below", str(EXPIRE_BELOW),
-         "--out-of-orderness", "0", "--idleness", "1"],
-        check=True, cwd=REPO_ROOT, capture_output=True,
-    )
-    try:
-        deadline = time.monotonic() + 90
-        while _jobs().get(job_name, {}).get("state") != "RUNNING":
-            assert time.monotonic() < deadline, f"{job_name} never reached RUNNING"
-            time.sleep(1.0)
-        yield {"topics": topics, "collector": collector, "producer": make_producer(BOOTSTRAP), "job_name": job_name}
-    finally:
-        jid = _jobs().get(job_name, {}).get("jid")
-        if jid:
-            urllib.request.urlopen(urllib.request.Request(f"{FLINK_URL}/jobs/{jid}?mode=cancel", method="PATCH"), timeout=10)
-            # Wait for the cancel to finish: a still-connected source would
-            # recreate a deleted topic through the broker's auto-creation.
-            deadline = time.monotonic() + 60
-            while _jobs().get(job_name, {}).get("state") != "CANCELED" and time.monotonic() < deadline:
-                time.sleep(1.0)
-        collector.consumer.close()
-        admin = AdminClient({"bootstrap.servers": BOOTSTRAP})  # held: its futures die with it
-        for future in admin.delete_topics(list(topics.values())).values():
-            future.result(timeout=10)
+    with IsolatedJob("t-gnn-test", ["--refresh-interval", str(REFRESH_INTERVAL), "--expire-below", str(EXPIRE_BELOW),
+                                    "--out-of-orderness", "0", "--idleness", "1"], BOOTSTRAP, FLINK_URL) as isolated:
+        collector = Collector(tail_consumer([isolated.topics["decayed"], isolated.topics["weights"]], BOOTSTRAP),
+                              isolated.topics["decayed"])
+        try:
+            yield {"topics": isolated.topics, "collector": collector, "producer": make_producer(BOOTSTRAP),
+                   "job_name": isolated.name}
+        finally:
+            collector.consumer.close()
 
 
 @pytest.fixture(scope="module")

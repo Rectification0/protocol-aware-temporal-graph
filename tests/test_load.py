@@ -6,6 +6,8 @@ These are proxy-scale smoke tests, not the literal enterprise-volume (NFR2,
 there is no real T-GNN inference engine yet (that's Phase 5); `store.get()`
 stands in for "an inference read" here, at a scale meant to demonstrate the
 boundedness/non-blocking properties mechanically, not to be a benchmark.
+The real measurements (actual inference passes, real Flink throughput) are
+`python -m t_gnn.bench`, written up in docs/benchmarks.md (Backlog B.7).
 """
 
 import os

@@ -112,6 +112,12 @@ The job runs inside the containers (PyFlink 1.18 needs Python 3.10; the
 host can stay on 3.12). Flink UI: http://localhost:8081. Details in
 `docs/operational-runbook.md`.
 
+## Performance against NFR1/NFR2
+
+`python -m t_gnn.bench` measures the real inference and ingestion paths.
+The measured results, including where the requirements are not yet met,
+are in **[`docs/benchmarks.md`](docs/benchmarks.md)** (Backlog B.7).
+
 See **[`docs/cli-reference.md`](docs/cli-reference.md#run_pipeline-scriptsrun_pipelinepy)**
 for the full flag reference, or the section below for every other CLI tool
 in this repo.

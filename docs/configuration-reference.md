@@ -195,6 +195,18 @@ The job runs only inside the `t-gnn-flink` containers. Its flags go after
 | `--alpha` | `0.3` | EWMA smoothing factor, same as `baseline.DEFAULT_ALPHA` |
 | `--parallelism` | `1` | Operator parallelism |
 | `--checkpoint-interval` | `10` | Seconds between checkpoints |
+| `--execution-mode` | `thread` | PyFlink's Python execution mode. `thread` runs the operators inside the JVM (pemja) and was about 3–4× faster here than `process`, a separate Python worker over gRPC, because keyed-state access dominates (docs/benchmarks.md). |
+
+**Checkpoints** go to the `flink-checkpoints` volume
+(`state.checkpoint-storage: filesystem` in `docker-compose.yml`'s
+`FLINK_PROPERTIES`). Flink's default keeps them in jobmanager memory,
+capped at 5 MB. The decay operator holds every edge it is still
+re-evaluating (~200 bytes each), so past ~25k live edges that default
+failed every checkpoint and the job crash-looped.
+
+**Throughput** on one taskmanager at parallelism 1 is ~600 edges/s
+sustained (docs/benchmarks.md). Raise `--parallelism` (and
+`taskmanager.numberOfTaskSlots`) for more.
 
 **Kafka topics.** `ensure_topics()` creates every topic with one partition:
 

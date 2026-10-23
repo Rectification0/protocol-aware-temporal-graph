@@ -22,6 +22,7 @@ and its own copy of this doc (including the Mordor-specific tasks below).
 | See the T-GNN's actual per-entity anomaly scores | [`score_entities`](#score_entities) |
 | Derive a suggested `λ_p` per protocol from real traffic | [`calibrate_decay`](#calibrate_decay) |
 | Watch the whole system run continuously, end to end | [`run_pipeline`](#run_pipeline-scriptsrun_pipelinepy) |
+| Measure NFR1 latency / NFR2 throughput on the real code paths (Backlog B.7) | [`bench`](#bench-python--m-t_gnnbench) |
 | Run decay + baseline on the real Flink cluster (Backlog B.1) | [`submit_flink_job`](#submit_flink_job-scriptssubmit_flink_jobpy), then `run_pipeline --decay-backend flink` |
 | Set up the local dev Postgres database (+ frontend API tables) | [`init_postgres`](#init_postgres-scriptsinit_postgrespy) |
 | Serve the backend the frontend talks to (`frontend_implementation` branch) | [`t_gnn.api`](#t_gnnapi-python--m-t_gnnapi) |
@@ -660,6 +661,30 @@ The job's own flags (refresh interval, expiry floor, watermark settings)
 are listed in `configuration-reference.md`'s "Flink decay/baseline job"
 section. To republish `λ_p` without touching the job, run `python -m
 t_gnn.flink.kafka_io publish-lambdas`.
+
+---
+
+### `bench` (`python -m t_gnn.bench`)
+
+Backlog B.7's benchmark harness. It measures NFR1 (inference latency) and
+NFR2 (throughput) on the real code paths and writes a JSON report.
+`docs/benchmarks.md` has the measured results and how to read them.
+
+```bash
+python -m t_gnn.bench inference [--sizes 100,1000,10000,100000] [--repeats 20]
+python -m t_gnn.bench ingest [--edges 100000] [--prune-every 1000]
+python -m t_gnn.bench flink [--rates 200,400,600,800] [--duration 30] [--parallelism 1]
+python -m t_gnn.bench all --output bench-report.json
+```
+
+| Command | Measures |
+|---|---|
+| `inference` | `TGNNInferenceEngine.run_once()` and the motif fast path at each graph size, plus the `edge_index` materialization and forward pass separately. p50/p99/max against the 1 ms target |
+| `ingest` | Edges/s through the in-process per-edge pipeline, with pruning, extrapolated to events/day against 1 B/day |
+| `flink` | Offers each rate to a throwaway copy of the Flink job for `--duration` seconds and tracks the backlog. Reports whether it stayed bounded and the highest rate that did. Needs `docker compose up -d` and the `[flink]` extra |
+
+Run it on an otherwise idle machine. Anything else using the CPU, the test
+suite included, skews the inference timings.
 
 ---
 

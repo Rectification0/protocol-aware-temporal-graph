@@ -45,8 +45,14 @@ services:
       - |
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
+        state.checkpoint-storage: filesystem
+        state.checkpoints.dir: file:///opt/flink/checkpoints
     volumes:
       - flink-jobs:/opt/flink/usrlib
+      # Checkpoints on disk, shared by both containers. Flink's default keeps
+      # them in jobmanager memory, capped at 5 MB -- the decay job outgrew it
+      # at ~25k live edges and crash-looped (found by Backlog B.7's benchmark).
+      - flink-checkpoints:/opt/flink/checkpoints
       # The host's source/config over the copies baked into the image, so a
       # job change needs only `submit_flink_job.py --replace`, not a rebuild.
       - ./src:/opt/t_gnn/src:ro
@@ -67,8 +73,14 @@ services:
         jobmanager.rpc.address: jobmanager
         taskmanager.numberOfTaskSlots: 4
         taskmanager.memory.jvm-metaspace.size: 512m
+        state.checkpoint-storage: filesystem
+        state.checkpoints.dir: file:///opt/flink/checkpoints
     volumes:
       - flink-jobs:/opt/flink/usrlib
+      # Checkpoints on disk, shared by both containers. Flink's default keeps
+      # them in jobmanager memory, capped at 5 MB -- the decay job outgrew it
+      # at ~25k live edges and crash-looped (found by Backlog B.7's benchmark).
+      - flink-checkpoints:/opt/flink/checkpoints
       # The host's source/config over the copies baked into the image, so a
       # job change needs only `submit_flink_job.py --replace`, not a rebuild.
       - ./src:/opt/t_gnn/src:ro
@@ -184,6 +196,7 @@ services:
 
 volumes:
   flink-jobs:
+  flink-checkpoints:
   kafka-data:
   redis-data:
   neo4j-data:
