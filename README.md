@@ -51,12 +51,15 @@ Backlog B.8 (a Mordor/OTRF-Security-Datasets ingestion adapter, `stage_mordor`) 
 ```bash
 cp .env.example .env       # then edit .env with your local credentials
 pip install -e ".[dev]"
-docker compose up -d       # Flink UI :8081, Neo4j :7474/7687, Redis :6379
+docker compose up -d       # Flink UI :8081, Kafka :9092, Neo4j :7474/7687, Redis :6379
 python scripts/init_postgres.py   # optional: creates the t_gnn_dev Postgres database
 ```
 
-`docker-compose.yml` brings up the Flink/Redis/Neo4j stack that Phase 2's
-cold-storage writes and Phase 3's motif state actually run against. A
+`docker-compose.yml` brings up the Flink/Kafka/Redis/Neo4j stack that Phase 2's
+cold-storage writes, Phase 3's motif state and the Flink decay/baseline job
+(Backlog B.1) actually run against. The first `up` builds the `t-gnn-flink`
+image (stock Flink 1.18 plus Python 3.10 and PyFlink), which takes a few
+minutes. A
 separate local Postgres instance (`t_gnn/db.py`) remains available for any
 persistence need that doesn't map to one of those three systems; see
 `CLAUDE.md`'s "Local dev database" section for the current split.
@@ -79,14 +82,33 @@ continuously against them on its own -- each phase is otherwise exercised
 individually by tests/CLIs. `scripts/run_pipeline.py` wires every real
 component together into one long-running process, fed either by
 continuously-generated synthetic traffic (there's no live production event
-source in this repo -- see tasks.md Backlog B.1) or by replaying a real
-staged dataset:
+source in this repo) or by replaying a real staged dataset:
 
 ```bash
 docker compose up -d
 python scripts/run_pipeline.py
 python scripts/run_pipeline.py --source replay --staged-dir data/lanl/simulated/staged
 ```
+
+### Decay and baseline on Flink (Backlog B.1)
+
+By default the pipeline computes decay and the baseline deviation
+in-process. `--decay-backend flink` hands that step to a real PyFlink job
+on the compose cluster instead: edges go to it over Kafka, and it returns
+the same decayed edges and deviation signals, plus timer-driven weight
+refreshes. `lambda_p` reaches the job through Flink broadcast state, so a
+config change applies without redeploying the job.
+
+```bash
+pip install -e ".[flink]"              # confluent-kafka, the host's Kafka client
+docker compose up -d                   # first run builds the t-gnn-flink image (a few minutes)
+python scripts/submit_flink_job.py     # idempotent; --replace after changing the job's code
+python scripts/run_pipeline.py --decay-backend flink
+```
+
+The job runs inside the containers (PyFlink 1.18 needs Python 3.10; the
+host can stay on 3.12). Flink UI: http://localhost:8081. Details in
+`docs/operational-runbook.md`.
 
 See **[`docs/cli-reference.md`](docs/cli-reference.md#run_pipeline-scriptsrun_pipelinepy)**
 for the full flag reference, or the section below for every other CLI tool

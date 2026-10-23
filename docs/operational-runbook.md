@@ -31,7 +31,11 @@ field-by-field reference on any config surface mentioned below, see
    FAILED` and the pipeline keeps its last good config. Any other process
    holding a `ProtocolDecayRegistry` can call `registry.reload()` itself.
    A reload replaces any in-memory `AdaptiveDecayCalibrator` (B.3) values
-   with the file's values, because the file wins.
+   with the file's values, because the file wins. With `--decay-backend
+   flink`, the pipeline also publishes the reloaded values into the Flink
+   job's broadcast state. The job applies them from its next
+   re-evaluation of each edge, without a redeploy (see "Running the Flink
+   decay/baseline job" below).
 
    **Or edit from the dashboard** (`frontend_implementation` branch,
    Frontend Backlog FB.1). Go to Settings → Alert thresholds and edit the
@@ -46,6 +50,48 @@ field-by-field reference on any config surface mentioned below, see
 5. **Verify**: `pytest tests/test_decay.py tests/test_protocol_registry.py`
    still pass, and watch the prune rate/audit log return to baseline over
    the next few minutes.
+
+## Running the Flink decay/baseline job
+
+Backlog B.1. This is optional: `run_pipeline.py` computes decay and the
+baseline in-process unless it's started with `--decay-backend flink`.
+
+1. **Start.** Run `pip install -e ".[flink]"` once, then `docker compose up
+   -d` and `python scripts/submit_flink_job.py`. The script creates the
+   Kafka topics, publishes `config/protocols.yaml`, and submits the job
+   only if it isn't already running.
+2. **Run the pipeline against it.** `python scripts/run_pipeline.py
+   --decay-backend flink`. On exit, the pipeline waits up to 15s for every
+   edge it sent to come back. If some don't, it warns with the count.
+3. **After changing the job's code** (`src/t_gnn/flink/` or the modules it
+   imports): `python scripts/submit_flink_job.py --replace`. The containers
+   mount `./src` read-only, so no rebuild is needed. Rebuild (`docker
+   compose up -d --build`) only after changing `docker/flink.Dockerfile`.
+4. **If the job disappears:** recreating the jobmanager container (an
+   image rebuild, `docker compose up` after a compose change) drops
+   submitted jobs, because the dev cluster has no HA. Run the submit
+   script again. Edges sent in the meantime wait in Kafka, and the new job
+   picks up from the offsets the old one last committed. Its keyed state
+   (baselines, pending re-evaluations) starts empty. Only a restart Flink
+   performs itself, after a task failure, restores state from a
+   checkpoint.
+5. **Things that differ from the in-process path:**
+   - Baseline state lives in the job, not the pipeline process. Restarting
+     `run_pipeline.py` keeps every entity's EWMA history; the in-process
+     path starts empty each time. To reset it, run `submit_flink_job.py
+     --replace`. The new job starts with empty state.
+   - The job's `--expire-below` floor only stops its re-evaluations. Edges
+     are still pruned by `PruningWatcher` and its dynamic ε.
+6. **Monitor** at http://localhost:8081: job state, per-operator
+   throughput, checkpoints, and each operator's watermark. A watermark
+   stuck at `-9223372036854775808` means no timestamped edge has arrived
+   yet.
+7. **Taskmanager died with `OutOfMemoryError: Metaspace`?** That happened
+   during development after a dozen job submissions, before `flink-python`
+   moved into `/opt/flink/lib` (`docker/flink.Dockerfile`). If it returns,
+   raise `taskmanager.memory.jvm-metaspace.size` in `docker-compose.yml`
+   (currently 512m). The taskmanager restarts on its own (`restart:
+   unless-stopped`) and the job recovers from its last checkpoint.
 
 ## Adding a new motif
 

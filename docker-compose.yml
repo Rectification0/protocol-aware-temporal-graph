@@ -13,6 +13,13 @@
 #   Flink UI:  http://localhost:8081
 #   Neo4j UI:  http://localhost:7474  (user: neo4j / password: see NEO4J_AUTH below)
 #   Redis:     localhost:6379
+#   Kafka:     localhost:9092  (containers: kafka:29092)
+#
+# Backlog B.1: jobmanager/taskmanager run the t-gnn-flink image
+# (docker/flink.Dockerfile -- stock Flink 1.18 + Python 3.10 + PyFlink + the
+# Kafka connector), built on first `up`. Kafka carries edges into the decay/
+# baseline job and lambda_p updates into its broadcast state. The job itself
+# is submitted separately: `python scripts/submit_flink_job.py`.
 #
 # frontend_implementation branch, tasks.md F17.2: the SOC dashboard + its API
 # are opt-in (compose `profiles`), so the command above is unchanged:
@@ -27,7 +34,10 @@
 
 services:
   jobmanager:
-    image: flink:1.18-scala_2.12-java11
+    build:
+      context: .
+      dockerfile: docker/flink.Dockerfile
+    image: t-gnn-flink:dev
     command: jobmanager
     ports:
       - "8081:8081"
@@ -37,12 +47,17 @@ services:
         jobmanager.rpc.address: jobmanager
     volumes:
       - flink-jobs:/opt/flink/usrlib
+      # The host's source/config over the copies baked into the image, so a
+      # job change needs only `submit_flink_job.py --replace`, not a rebuild.
+      - ./src:/opt/t_gnn/src:ro
+      - ./config:/opt/t_gnn/config:ro
     networks:
       - t-gnn-dev
 
   taskmanager:
-    image: flink:1.18-scala_2.12-java11
+    image: t-gnn-flink:dev
     command: taskmanager
+    restart: unless-stopped
     depends_on:
       - jobmanager
     scale: 1
@@ -51,8 +66,38 @@ services:
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
         taskmanager.numberOfTaskSlots: 4
+        taskmanager.memory.jvm-metaspace.size: 512m
     volumes:
       - flink-jobs:/opt/flink/usrlib
+      # The host's source/config over the copies baked into the image, so a
+      # job change needs only `submit_flink_job.py --replace`, not a rebuild.
+      - ./src:/opt/t_gnn/src:ro
+      - ./config:/opt/t_gnn/config:ro
+    networks:
+      - t-gnn-dev
+
+  kafka:
+    image: apache/kafka:3.7.1
+    ports:
+      - "9092:9092"
+    environment:
+      # Single-node KRaft (no ZooKeeper). Two listeners: EXTERNAL for the
+      # host (run_pipeline.py, tests), INTERNAL for the Flink containers.
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: INTERNAL://:29092,EXTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    volumes:
+      - kafka-data:/var/lib/kafka/data
     networks:
       - t-gnn-dev
 
@@ -139,6 +184,7 @@ services:
 
 volumes:
   flink-jobs:
+  kafka-data:
   redis-data:
   neo4j-data:
   neo4j-logs:

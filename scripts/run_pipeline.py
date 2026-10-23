@@ -2,8 +2,7 @@
 together into one live process, the piece nothing else in the codebase
 provides (each phase is otherwise exercised individually by tests/CLIs).
 
-Since Phase 1's "Flink job" was deliberately never deployed (tasks.md
-Backlog B.1), there is no live production event source to read from. This
+There is no live production event source to read from, so this
 script's default `--source synthetic` substitutes a continuously-generated
 synthetic traffic stream (background authentication noise, reusing
 `simulate_traffic.py`'s generators, plus periodically injected attack
@@ -16,6 +15,12 @@ rather than running until Ctrl+C. Either way, everything the traffic
 flows through is real, not staged:
 
   - `DecayStreamProcessor` (1.3-1.5) -- real decay + EWMA baseline deviation.
+    With `--decay-backend flink` (Backlog B.1) that step runs in the real
+    Flink job instead (`t_gnn.flink.decay_job`, submitted with
+    `scripts/submit_flink_job.py`): edges go to it over Kafka, and its
+    decayed edges, deviation signals and timer-driven weight refreshes come
+    back the same way. lambda_p changes (config reloads,
+    `--adaptive-calibration`) are published into the job's broadcast state.
   - `ActiveGraphStore`/`ShardedActiveGraphStore` (2.1) -- real in-memory graph.
   - `PruningWatcher` + `EpsilonController` (2.2/2.3) writing to a real
     Neo4j instance via `BufferedColdStorageWriter`/`Neo4jColdStorageWriter`
@@ -50,6 +55,7 @@ Usage:
     python scripts/run_pipeline.py --shards 3 --fuzzy --attack-every 20
     python scripts/run_pipeline.py --max-ticks 200   # finite synthetic run instead of Ctrl+C
     python scripts/run_pipeline.py --source replay --staged-dir data/lanl/simulated/staged
+    python scripts/submit_flink_job.py && python scripts/run_pipeline.py --decay-backend flink
 """
 
 from __future__ import annotations
@@ -252,6 +258,10 @@ def main() -> None:
     parser.add_argument("--config-reload-interval", type=float, default=2.0,
                          help="seconds between checks for edits to config/protocols.yaml + motifs.yaml "
                               "(hot reload, Frontend Backlog FB.1); 0 disables")
+    parser.add_argument("--decay-backend", choices=("local", "flink"), default="local",
+                         help="local: decay + baseline in this process (default). flink: hand them to the running "
+                              "Flink job over Kafka (Backlog B.1) -- run scripts/submit_flink_job.py first")
+    parser.add_argument("--kafka-bootstrap", default=None, help="--decay-backend flink only (default localhost:9092)")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-ticks", type=int, default=None, help="synthetic mode only: stop after N ticks instead of running until Ctrl+C")
     args = parser.parse_args()
@@ -280,6 +290,21 @@ def main() -> None:
     registry = ProtocolDecayRegistry()
     processor = DecayStreamProcessor(registry=registry)
     calibrator = AdaptiveDecayCalibrator(registry=registry) if args.adaptive_calibration else None
+
+    flink_bridge = None
+    if args.decay_backend == "flink":
+        from t_gnn.flink.bridge import FlinkDecayBridge, apply_weight_refresh, job_running
+
+        try:
+            flink_bridge = FlinkDecayBridge(**({"bootstrap": args.kafka_bootstrap} if args.kafka_bootstrap else {}))
+            published = flink_bridge.publish_lambdas(registry)
+        except Exception as exc:
+            print(f"ERROR: could not reach Kafka ({exc}). Run `docker compose up -d` first.", file=sys.stderr)
+            sys.exit(1)
+        print(f"connected to Kafka; published {published} lambda_p value(s) to the Flink job's broadcast state.")
+        if not job_running():
+            print("WARNING: the Flink decay/baseline job isn't running -- edges will queue in Kafka until it is. "
+                  "Run `python scripts/submit_flink_job.py`.", file=sys.stderr)
 
     store = ShardedActiveGraphStore(args.shards) if args.shards > 1 else ActiveGraphStore()
 
@@ -349,7 +374,7 @@ def main() -> None:
                   f"disabled for this run (run `python scripts/init_postgres.py` first if the database "
                   f"itself doesn't exist yet).", file=sys.stderr)
 
-    print(f"source={args.source} shards={args.shards} fuzzy={args.fuzzy} "
+    print(f"source={args.source} decay_backend={args.decay_backend} shards={args.shards} fuzzy={args.fuzzy} "
           f"adaptive_calibration={args.adaptive_calibration}")
     print(f"audit log: {args.audit_log}")
 
@@ -370,20 +395,35 @@ def main() -> None:
     sim_t: Optional[float] = None
     tick = 0
 
-    def _process_edge(edge: Edge) -> None:
-        metrics.observe_edge_processed()
-        processed = processor.process(edge, t=edge.t_e)
+    def _apply_processed(processed) -> None:
         store.upsert(processed.edge)
         inference_engine.observe_deviation(processed.deviation)
         deviation = processed.deviation
         if deviation.z_score is not None and abs(deviation.z_score) >= args.z_threshold:
-            print(f"[t={edge.t_e:.0f}] ANOMALY     {deviation.entity} protocol={deviation.protocol} "
+            print(f"[t={processed.edge.t_e:.0f}] ANOMALY     {deviation.entity} protocol={deviation.protocol} "
                   f"z={deviation.z_score:.2f}")
+
+    def _apply_flink_output(timeout: float = 0.0) -> None:
+        processed_batch, refreshes = flink_bridge.poll(timeout=timeout)
+        for processed in processed_batch:
+            _apply_processed(processed)
+        for record in refreshes:
+            apply_weight_refresh(store, record)
+
+    def _process_edge(edge: Edge) -> None:
+        metrics.observe_edge_processed()
+        if flink_bridge is not None:
+            flink_bridge.submit(edge)
+            _apply_flink_output()
+        else:
+            _apply_processed(processor.process(edge, t=edge.t_e))
         motif_engine.on_edge(edge)
         if calibrator is not None:
             for event in calibrator.observe(edge):
                 print(f"[t={event.t:.0f}] RECALIBRATE {event.protocol} lambda_p "
                       f"{event.previous_lambda_p:.6g} -> {event.applied_lambda_p:.6g}")
+                if flink_bridge is not None:
+                    flink_bridge.publish_lambdas(registry)
 
     def _run_metrics_pass(t: float) -> None:
         prune_stats = watcher.run_once(t=t)
@@ -426,7 +466,8 @@ def main() -> None:
             sim_t = edge.t_e
 
             if args.config_reload_interval > 0 and time.monotonic() >= next_config_check:
-                config_watcher.check()
+                if "protocols" in config_watcher.check() and flink_bridge is not None:
+                    flink_bridge.publish_lambdas(registry)
                 next_config_check = time.monotonic() + args.config_reload_interval
 
             if tick % args.metrics_every == 0:
@@ -439,6 +480,15 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\nshutting down...")
     finally:
+        if flink_bridge is not None:
+            # Collect what the job still owes us before the closing snapshot.
+            deadline = time.monotonic() + 15.0
+            while flink_bridge.received < flink_bridge.sent and time.monotonic() < deadline:
+                _apply_flink_output(timeout=0.5)
+            if flink_bridge.received < flink_bridge.sent:
+                print(f"WARNING: {flink_bridge.sent - flink_bridge.received} edge(s) sent to Flink never came back "
+                      f"(is the job running?)", file=sys.stderr)
+            flink_bridge.close()
         if sim_t is not None:
             _run_metrics_pass(sim_t)  # final flush, so the closing snapshot reflects the true end state
         buffered_writer.stop(timeout=5.0)

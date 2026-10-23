@@ -29,9 +29,10 @@ class ProtocolDecayConfig:
 class ProtocolDecayRegistry:
     """Loads protocol -> lambda_p mappings from config/protocols.yaml.
 
-    Phase 0 provides load/reload/lookup only. Phase 1 wires this into
-    Flink broadcast state so lambda_p updates propagate without redeploy
-    (tasks.md 1.1/1.2) instead of each task manager re-reading the file.
+    The in-process source of lambda_p. For the Flink job (Backlog B.1)
+    the same values are published from here into Flink broadcast state
+    (`t_gnn.flink.kafka_io.publish_lambdas`), so the job's task managers
+    never read this file themselves.
     """
 
     def __init__(self, config_path: Optional[Path] = None) -> None:

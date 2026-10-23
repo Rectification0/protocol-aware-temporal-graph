@@ -2,10 +2,11 @@
 
 Framework-agnostic implementation of `w(e, t) = w_0 * e^(-lambda_p * (t - t_e))`.
 design.md 2.1 assigns "continuously recompute w(e,t)" to a Flink streaming
-job; this module is the business logic that job will call per edge once a
-real Flink pipeline is stood up -- the same staging pattern already applied
-to lambda_p lookup/hot-reload in protocol_registry.py (tasks.md 1.1/1.2 are
-that registry's `.get()`/`.reload()`; this layers 1.3 on top of it).
+job; this module is the business logic that job (Backlog B.1,
+`t_gnn.flink.decay_job`) calls, both per edge and on its re-evaluation
+timers. `DecayEngine` is the in-process path, reading lambda_p from
+protocol_registry.py (tasks.md 1.1/1.2 are that registry's
+`.get()`/`.reload()`; this layers 1.3 on top of it).
 """
 
 from __future__ import annotations

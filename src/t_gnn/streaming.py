@@ -1,11 +1,12 @@
 """Per-edge streaming pipeline step tying decay + baseline together
 (tasks.md 1.1-1.5, design.md section 3 "Data Flow" steps 2-4).
 
-This is the framework-agnostic version of the Flink streaming job's
-per-record logic: recompute w(e,t) (decay.py), then feed the result into
-the entity/protocol baseline (baseline.py) to produce a deviation signal.
-Once a real Flink job exists, this is the logic its ProcessFunction(s)
-call per edge -- see decay.py/baseline.py docstrings for the same note.
+This is the in-process version of the Flink streaming job's per-record
+logic: recompute w(e,t) (decay.py), then feed the result into the
+entity/protocol baseline (baseline.py) to produce a deviation signal. The
+real Flink job (Backlog B.1, `t_gnn.flink.decay_job`) runs the same two
+functions as keyed operators and produces the same `ProcessedEdge`s;
+`scripts/run_pipeline.py --decay-backend` picks which one runs.
 """
 
 from __future__ import annotations

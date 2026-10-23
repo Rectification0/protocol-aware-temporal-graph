@@ -22,6 +22,7 @@ and its own copy of this doc (including the Mordor-specific tasks below).
 | See the T-GNN's actual per-entity anomaly scores | [`score_entities`](#score_entities) |
 | Derive a suggested `λ_p` per protocol from real traffic | [`calibrate_decay`](#calibrate_decay) |
 | Watch the whole system run continuously, end to end | [`run_pipeline`](#run_pipeline-scriptsrun_pipelinepy) |
+| Run decay + baseline on the real Flink cluster (Backlog B.1) | [`submit_flink_job`](#submit_flink_job-scriptssubmit_flink_jobpy), then `run_pipeline --decay-backend flink` |
 | Set up the local dev Postgres database (+ frontend API tables) | [`init_postgres`](#init_postgres-scriptsinit_postgrespy) |
 | Serve the backend the frontend talks to (`frontend_implementation` branch) | [`t_gnn.api`](#t_gnnapi-python--m-t_gnnapi) |
 | Run the frontend dashboard itself (`frontend_implementation` branch) | `npm run dev` in `frontend/` — see [this task](#task-turn-on-the-backend-api-and-frontend-dashboard) |
@@ -616,6 +617,8 @@ python scripts/run_pipeline.py --source replay --staged-dir data/lanl/simulated/
 | `--adaptive-calibration` | off | Enable `AdaptiveDecayCalibrator` |
 | `--audit-log` | `logs/audit.log` | Where structured audit records are written |
 | `--config-reload-interval` | `2.0` | Seconds between checks for edits to `config/protocols.yaml`/`config/motifs.yaml`. Changed files are hot-reloaded (logged `CONFIG RELOADED`; a broken file is reported and the last good config kept). `0` disables |
+| `--decay-backend` | `local` | `local` computes decay and the baseline in-process. `flink` sends edges to the running Flink job over Kafka and applies what comes back (Backlog B.1). It needs `pip install -e ".[flink]"` and `scripts/submit_flink_job.py` first, and publishes `λ_p` changes (config reloads, `--adaptive-calibration`) into the job |
+| `--kafka-bootstrap` | `localhost:9092` | `--decay-backend flink` only |
 | `--seed` | `42` | RNG seed (synthetic mode) |
 | `--max-ticks` | *(none)* | Synthetic mode only: stop after N ticks instead of running until Ctrl+C |
 
@@ -624,6 +627,37 @@ motif-reset event, plus a periodic metrics snapshot; structured JSON audit
 records in `--audit-log`; a final summary on exit (or Ctrl+C).
 
 See `README.md`'s "Running the full pipeline live" for a fuller walkthrough.
+
+---
+
+### `submit_flink_job` (`scripts/submit_flink_job.py`)
+
+Submits the Flink decay/baseline job (Backlog B.1) to the compose cluster.
+It's idempotent. It creates the Kafka topics if they're missing,
+publishes `config/protocols.yaml`'s `λ_p` values into the job's
+broadcast-state topic, and submits the job unless one named
+`t-gnn-decay-baseline` is already running. It waits for the job to reach
+RUNNING.
+
+**Prerequisites**: `docker compose up -d`, plus `pip install -e ".[flink]"`.
+
+```bash
+python scripts/submit_flink_job.py
+python scripts/submit_flink_job.py --replace                          # after changing the job's code
+python scripts/submit_flink_job.py --replace -- --refresh-interval 600   # job flags after --
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--flink-url` | `http://localhost:8081` | Flink REST API |
+| `--bootstrap-servers` | `localhost:9092` | Kafka, as the host sees it |
+| `--replace` | off | Cancel a running copy first, then submit |
+| `--wait` | `60` | Seconds to wait for RUNNING before failing |
+
+The job's own flags (refresh interval, expiry floor, watermark settings)
+are listed in `configuration-reference.md`'s "Flink decay/baseline job"
+section. To republish `λ_p` without touching the job, run `python -m
+t_gnn.flink.kafka_io publish-lambdas`.
 
 ---
 

@@ -22,7 +22,7 @@ Phases 0–8 in `tasks.md` have code (Phase 9, ML training, is planned and not s
 | Phase | Status |
 |---|---|
 | 0 Foundations | Complete |
-| 1 Decay | Framework-agnostic Python (decay/baseline/deviation) — stands in for a future Flink job; see Architecture. |
+| 1 Decay | Framework-agnostic Python (decay/baseline/deviation), run in-process by default; Backlog B.1 runs the same functions as a real PyFlink job on the compose cluster (`run_pipeline.py --decay-backend flink`). See Architecture. |
 | 2 Pruning | Mixed: Active Graph Store/Pruning Watcher are framework-agnostic; Neo4j cold-storage write path is real, running against `docker-compose.yml`. |
 | 3 Motif Caching | Mixed: motif schema/registry + engine delta logic are framework-agnostic; Redis-backed motif-state store is real, with prune→reset wiring live via Phase 2's `PruneEventBus`. |
 | 4 Cold Storage/Forensics | Entirely real — read-only query layer over Phase 2's live Neo4j data. |
@@ -32,7 +32,7 @@ Phases 0–8 in `tasks.md` have code (Phase 9, ML training, is planned and not s
 | 8 Tooling follow-ups | `score_entities.py` CLI + a PowerShell doc fix, both real, discovered as gaps while using Phase 7's CLIs. |
 | 9 Machine learning | **Not started** (added 2026-10-19). Train and evaluate the untrained `DynamicTGNN`: problem definition (9.1, needs developer sign-off first), leakage-safe dataset, non-ML baselines it must beat, training, T-GNN evaluation in `pilot.py`, checkpoint loading, calibrated thresholds. Specs.md §4 rules out *replacing the architecture*, not training it; 9.14 (a new architecture) is gated on that. |
 
-**Backlog:** B.3 (`adaptive_calibration.py`), B.4 (fuzzy motif matching), B.5 (sharding), B.6 (`feedback.py`) are real, tested extensions — see Architecture. B.1/B.2 (a real Flink job) are deliberately unattempted: PyFlink for this stack's Flink 1.18 only supports Python 3.8–3.10 against this env's Python 3.12, and there's no message broker in `docker-compose.yml`. B.7 (real enterprise-scale NFR validation) is an operational gap like 0.4/7.3 (though `tests/test_load.py` has two opt-in proxy benchmarks via `RUN_HEAVY_LOAD_TEST=1`). B.8 (Mordor/OTRF ingestion adapter) is implemented and tested but deliberately kept off `main`, on `feature/mordor-ingestion`.
+**Backlog:** B.3 (`adaptive_calibration.py`), B.4 (fuzzy motif matching), B.5 (sharding), B.6 (`feedback.py`) are real, tested extensions — see Architecture. B.1 (a real Flink job) is done (2026-10-23): containerized PyFlink in a `t-gnn-flink` image (Python 3.10 inside, so the host's 3.12 doesn't matter) plus a Kafka broker in compose. B.2 (Flink backpressure → ε) is next and now unblocked. B.7 (real enterprise-scale NFR validation) is an operational gap like 0.4/7.3 (though `tests/test_load.py` has two opt-in proxy benchmarks via `RUN_HEAVY_LOAD_TEST=1`). B.8 (Mordor/OTRF ingestion adapter) is implemented and tested but deliberately kept off `main`, on `feature/mordor-ingestion`.
 
 ### Frontend status (`frontend_implementation` branch — NOT merged to `main`, per developer instruction)
 
@@ -144,7 +144,11 @@ python -m t_gnn.data.calibrate_decay --staged-dir <dir> [--output report.json]  
 python -m t_gnn.data.simulate_traffic --output-dir <dir> [--num-users 200] [--num-machines 50] [--days 7] [--seed 42]   # generate synthetic labeled traffic for pilot.py
 python -m t_gnn.pilot --staged-dir <dir> --redteam <redteam.txt> [--z-threshold 3.0] [--output report.json]   # false-positive/negative rates vs. labeled ground truth
 python -m t_gnn.score_entities --staged-dir <dir> [--top 20] [--output scores.json]   # replay staged edges and print live T-GNN per-entity scores
-docker compose up -d                     # bring up Flink/Redis/Neo4j (needed for the Neo4j and Redis integration tests)
+docker compose up -d                     # bring up Flink/Kafka/Redis/Neo4j (needed for the Neo4j, Redis and Flink integration tests); first run builds the t-gnn-flink image
+pip install -e ".[flink]"               # B.1: confluent-kafka, the host's Kafka client
+python scripts/submit_flink_job.py [--replace] [-- <job flags>]   # B.1: idempotently submit the decay/baseline job + publish lambda_p
+python scripts/run_pipeline.py --decay-backend flink                # B.1: decay + baseline on the Flink job instead of in-process
+python -m t_gnn.flink.kafka_io publish-lambdas                      # B.1: republish config/protocols.yaml into the job's broadcast state
 docker compose --profile dashboard up -d --build   # frontend_implementation: + API and dashboard containers (http://localhost:8080) -- see docs/deployment.md
 ```
 
@@ -160,9 +164,14 @@ and flags. Kept off `main` at the developer's request rather than merged in.
 
 ## Local dev database — read before adding any persistence code
 
-`docker-compose.yml`'s Flink/Redis/Neo4j stack (`docker compose up -d`) is
-running for local dev: Flink UI on `localhost:8081`, Neo4j on
-`localhost:7474`/`7687`, Redis on `localhost:6379` — verified reachable.
+`docker-compose.yml`'s Flink/Kafka/Redis/Neo4j stack (`docker compose up -d`) is
+running for local dev: Flink UI on `localhost:8081`, Kafka on `localhost:9092`
+(containers: `kafka:29092`), Neo4j on `localhost:7474`/`7687`, Redis on
+`localhost:6379` — verified reachable. The jobmanager/taskmanager run the
+`t-gnn-flink` image (`docker/flink.Dockerfile`) with `./src`/`./config`
+mounted read-only, so job code changes need only `submit_flink_job.py
+--replace`. Recreating the jobmanager drops submitted jobs (no HA), so
+resubmit afterwards.
 It was brought up ahead of its originally-planned trigger point (Phase 3's
 Redis TTL semantics / Phase 4's Neo4j) at the developer's explicit request,
 so it's available from the start of Phase 2. New persistence work that maps
@@ -185,7 +194,10 @@ Tests that need the live Neo4j instance (`tests/test_cold_storage.py`'s
 (`tests/test_motif_engine.py`'s `RedisMotifStateStore` tests) check
 connectivity at collection time and `skip` (not fail) if
 `docker compose up -d` hasn't been run — the rest of the suite doesn't
-depend on the stack being up.
+depend on the stack being up. `tests/test_flink_job.py` (B.1) likewise
+skips without Kafka + the Flink REST API. When it runs, it submits its own
+job on throwaway `t-gnn-test-*` topics and cancels/deletes them afterwards,
+leaving the long-running job's topics and watermark alone (~35s).
 
 ### Destructive operations on local state — never as housekeeping
 
@@ -238,7 +250,7 @@ broadcast state (design.md §2.2, tasks.md 1.1/1.2).
 **Phase 1 — decay/baseline/deviation (framework-agnostic Python):**
 - `decay.py` (`compute_weight()`, `DecayEngine`) — FR1.1/1.3: `w(e,t) = w_0 · e^(-λ_p·(t-t_e))`, clamped at zero elapsed time; `refresh()` returns a new `Edge`, never mutates.
 - `baseline.py` (`EWMABaseline`, `BaselineStore`, `DeviationSignal`) — FR1.4/1.5: EWMA mean/variance keyed by `(entity=edge.src, protocol)`; `z_score` computed before folding in the new observation, `None` until ≥2 prior samples with nonzero variance exist.
-- `streaming.py` (`DecayStreamProcessor`) — ties the two into the per-edge step a future Flink `ProcessFunction` will wrap.
+- `streaming.py` (`DecayStreamProcessor`) — ties the two into the per-edge step; the in-process twin of B.1's Flink job.
 - `data/calibrate_decay.py` (`calibrate()`) — suggests λ_p per protocol from median same-entity inter-arrival gap in staged LANL edges; only reports when `min_samples` is cleared, else defers to the registry's current value.
 
 **Phase 2 — dynamic graph pruning (mixed):**
@@ -267,13 +279,19 @@ broadcast state (design.md §2.2, tasks.md 1.1/1.2).
 
 **Phase 8 — tooling follow-ups.** `score_entities.py` closes the gap that `pilot.py` never actually drives the PyG forward pass: replays staged edges through the same `DecayStreamProcessor`/`MotifEngine`, with `TGNNInferenceEngine` wired to `MotifAlertBus` for inline fast-path scoring, then one final scheduled pass over the remaining graph.
 
+**Backlog B.1 — the real Flink job** (`src/t_gnn/flink/`):
+- `logic.py` — all per-record logic + wire formats (topic names, record shapes), PyFlink-free so the host's 3.12 suite tests it. Keep new job logic here, not in `decay_job.py`.
+- `decay_job.py` — the PyFlink job (runs only in the container): `DecayFunction` (KeyedBroadcastProcessFunction keyed by edge id; `λ_p` in broadcast state from the compacted `t-gnn.decay.lambdas` topic; event-time re-evaluation timers every `--refresh-interval` plus exactly at the `--expire-below` crossing) → `BaselineFunction` (keyed by `src|protocol`, EWMA state as JSON). Event time = `t_e`, so output equals `DecayStreamProcessor.process(edge, t=edge.t_e)`. Gotcha: a Python `TimestampAssigner` must go on `assign_timestamps_and_watermarks()` — PyFlink silently ignores it on `from_source()` and falls back to Kafka's wall-clock timestamps.
+- `kafka_io.py` (host, `confluent-kafka`) — topics, `publish_lambdas()`, `tail_consumer()`; `bridge.py` — `FlinkDecayBridge` + `apply_weight_refresh()` (never resurrects a pruned edge) for `run_pipeline.py --decay-backend flink`, which republishes `λ_p` on config reload/adaptive recalibration. Baseline state lives in the job, so it survives pipeline restarts (unlike the in-process path). The job doesn't prune — `PruningWatcher` still owns that.
+- `baseline.py`'s `observe_baseline()` + `EWMABaseline.to_state()/from_state()` were extracted so both paths share one implementation.
+
 **Backlog B.3–B.6** (real, tested extensions):
 - `adaptive_calibration.py` (`AdaptiveDecayCalibrator`) — B.3: online counterpart to `calibrate_decay.py`, reapplying its `ln(2)/median_gap` heuristic every N edges, clamped by `max_relative_change`; writes via a new `ProtocolDecayRegistry.update()` (in-memory only).
 - `motifs.py`'s `match_score()` + `motif_engine.py`'s `fuzzy=`/`min_confidence=` — B.4: partial credit on `edge_type`/`protocol` substitution (never on `src_type`/`dst_type`); `fuzzy=False` is byte-for-byte pre-B.4 behavior.
 - `sharding.py` + `ShardedActiveGraphStore`/`ShardedMotifStateStore` — B.5: SHA-256-based stable shard routing (not Python's salted `hash()`); real partitioning logic, though each shard would need a real RPC layer between processes for a genuine deployment.
 - `feedback.py` (`MotifFeedbackBus`, `MotifPriorityTracker`) — B.6: Laplace-smoothed true-positive-rate priority scoring per motif from analyst dispositions; downstream-only, no change to detection logic.
 
-`scripts/run_pipeline.py` (ad hoc, not a tasks.md item) wires every real component above into one long-running process, with `--source synthetic` (default) or `--source replay --staged-dir <dir>`. Verified running live against the real compose stack in both modes. Doesn't wire in B.6's tracker/bus (that loop is human-driven).
+`scripts/run_pipeline.py` (ad hoc, not a tasks.md item) wires every real component above into one long-running process, with `--source synthetic` (default) or `--source replay --staged-dir <dir>`, and `--decay-backend local|flink` (B.1). Verified running live against the real compose stack in both modes. Doesn't wire in B.6's tracker/bus (that loop is human-driven).
 
 ### Frontend architecture notes
 

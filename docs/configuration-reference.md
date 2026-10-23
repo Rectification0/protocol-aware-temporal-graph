@@ -152,6 +152,44 @@ already-constructed `redis.Redis` client directly (e.g.
 `docker-compose.yml`'s unauthenticated dev instance). Construct your own
 client with TLS/auth for anything beyond local dev.
 
+## Flink decay/baseline job (`src/t_gnn/flink/decay_job.py`, Backlog B.1)
+
+The job runs only inside the `t-gnn-flink` containers. Its flags go after
+`--` on `scripts/submit_flink_job.py` (for example
+`python scripts/submit_flink_job.py --replace -- --refresh-interval 600`):
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--bootstrap-servers` | `kafka:29092` | Kafka as the containers see it (compose's `INTERNAL` listener) |
+| `--job-name` | `t-gnn-decay-baseline` | `submit_flink_job.py` and `run_pipeline.py` look for this name |
+| `--edges-from` | `latest` | Where a first-ever start (no committed offsets) begins reading the edges topic. Restarts resume from the offsets committed at the last checkpoint |
+| `--refresh-interval` | `3600` | Event-time seconds between `w(e,t)` re-evaluations of a live edge (design.md 2.1's timer). `0` turns them off and keeps no per-edge state |
+| `--expire-below` | `0.05` | The job stops re-evaluating an edge once `w` falls to this (the default `epsilon_min`). This is **not** pruning: `PruningWatcher` still prunes against its dynamic ε |
+| `--out-of-orderness` | `5` | Seconds of edge lateness the watermark allows |
+| `--idleness` | `5` | Seconds before the mostly-silent `λ_p` input stops holding back the watermark |
+| `--alpha` | `0.3` | EWMA smoothing factor, same as `baseline.DEFAULT_ALPHA` |
+| `--parallelism` | `1` | Operator parallelism |
+| `--checkpoint-interval` | `10` | Seconds between checkpoints |
+
+**Kafka topics.** `ensure_topics()` creates every topic with one partition:
+
+| Topic | Direction | Contents |
+|---|---|---|
+| `t-gnn.edges.raw` | in | `Edge.to_json()`, keyed by `src` |
+| `t-gnn.decay.lambdas` | in, compacted | One record per protocol: `{"protocol", "lambda_p", "published_at"}`. Key `*` carries `default_lambda_p` |
+| `t-gnn.edges.decayed` | out | `{"edge", "deviation"}`, the same `ProcessedEdge` that `DecayStreamProcessor.process(edge, t=edge.t_e)` returns |
+| `t-gnn.edges.weights` | out | Timer re-evaluations: `{"edge_id", "src", "dst", "protocol", "t", "w", "lambda_p", "expired"}` |
+
+**Time.** Event time is each edge's own `t_e`. The decayed output therefore
+matches the in-process path exactly (`tests/test_flink_job.py` checks this
+against the live job). Re-evaluation timers advance with the data, not the
+wall clock, so they stop firing when edges stop arriving.
+
+**Before any `λ_p` is published,** an edge is held in state and retried
+every second rather than decayed with a guessed constant.
+`submit_flink_job.py` and `run_pipeline.py --decay-backend flink` both
+publish `config/protocols.yaml` on start.
+
 ## `BufferedColdStorageWriter` (`src/t_gnn/cold_storage.py`, tasks.md 6.4)
 
 | Parameter | Default | Meaning |
@@ -214,6 +252,7 @@ testing" for the intended workflow (feed the output straight into
 | Variable | Used by |
 |---|---|
 | `PGHOST`/`PGPORT`/`PGDATABASE`/`PGUSER`/`PGPASSWORD` | `src/t_gnn/db.py` (Postgres, for persistence needs that don't map to Flink/Redis/Neo4j — see `CLAUDE.md`'s "Local dev database" section) |
+| `KAFKA_BOOTSTRAP_SERVERS` | `src/t_gnn/flink/kafka_io.py` (Backlog B.1), default `localhost:9092` |
 | `NEO4J_URI`/`NEO4J_USER`/`NEO4J_PASSWORD` | Documented reference values matching `docker-compose.yml`; not auto-read by `Neo4jConfig` (construct it explicitly) |
 | `AUDIT_LOG_PATH` | `frontend_implementation` branch only — `src/t_gnn/api/deps.py`'s `audit_log_path()` (tasks.md F0.8), default `logs/audit.log`, must match whatever `scripts/run_pipeline.py --audit-log` path the pipeline process is writing to |
 | `STREAM_POLL_INTERVAL_SECONDS` | `frontend_implementation` branch only — `src/t_gnn/api/deps.py`'s `get_stream_config()` (tasks.md F0.10's SSE endpoint), default `1.0` |

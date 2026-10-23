@@ -1,0 +1,207 @@
+"""Backlog B.1: the real Flink decay/baseline job, end to end on the compose stack.
+
+Submits its own copy of the job against throwaway topics (unique per run),
+so its event-time clock -- driven by the test's own edge timestamps -- can't
+touch the long-running `t-gnn-decay-baseline` job, and cancels the job and
+deletes those topics afterwards. Skipped unless Kafka (localhost:9092) and
+the Flink REST API (localhost:8081) are up: `docker compose up -d`. Slow-ish
+(~30-60s, mostly job startup).
+"""
+
+import json
+import math
+import subprocess
+import time
+import urllib.request
+import uuid
+from pathlib import Path
+
+import pytest
+
+confluent_kafka = pytest.importorskip("confluent_kafka", reason="needs the [flink] extra: pip install -e '.[flink]'")
+
+from confluent_kafka.admin import AdminClient  # noqa: E402
+
+from t_gnn.flink.kafka_io import drain, ensure_topics, make_producer, produce_edge, publish_lambdas, tail_consumer  # noqa: E402
+from t_gnn.flink.logic import expiry_time, parse_decayed_record  # noqa: E402
+from t_gnn.protocol_registry import ProtocolDecayRegistry  # noqa: E402
+from t_gnn.schema import Edge  # noqa: E402
+from t_gnn.streaming import DecayStreamProcessor  # noqa: E402
+
+BOOTSTRAP = "localhost:9092"
+FLINK_URL = "http://localhost:8081"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+JOB_PATH_IN_IMAGE = "/opt/t_gnn/src/t_gnn/flink/decay_job.py"
+T0 = 1_000_000.0  # the test's own event-time origin; its topics see no other clock
+REFRESH_INTERVAL = 60.0
+EXPIRE_BELOW = 0.05
+
+
+def _stack_up() -> bool:
+    try:
+        AdminClient({"bootstrap.servers": BOOTSTRAP}).list_topics(timeout=2)
+        urllib.request.urlopen(f"{FLINK_URL}/overview", timeout=2)
+        return True
+    except Exception:
+        return False
+
+
+pytestmark = pytest.mark.skipif(not _stack_up(), reason="Kafka/Flink not reachable -- run `docker compose up -d` first")
+
+
+def _jobs() -> dict:
+    with urllib.request.urlopen(f"{FLINK_URL}/jobs/overview", timeout=5) as resp:
+        return {j["name"]: j for j in json.load(resp)["jobs"]}
+
+
+class Collector:
+    """Accumulates the job's output records, keyed for lookups across tests."""
+
+    def __init__(self, consumer, decayed_topic: str) -> None:
+        self.consumer = consumer
+        self.decayed_topic = decayed_topic
+        self.decayed: list = []
+        self.weights: list[dict] = []
+
+    def poll(self, timeout: float) -> None:
+        for topic, value in drain(self.consumer, timeout=timeout):
+            if topic == self.decayed_topic:
+                self.decayed.append(parse_decayed_record(value))
+            else:
+                self.weights.append(json.loads(value))
+
+    def decayed_for(self, entity: str) -> list:
+        return [(edge, signal) for edge, signal in self.decayed if edge.src == entity]
+
+    def weights_for(self, edge_id: str) -> list[dict]:
+        return [w for w in self.weights if w["edge_id"] == edge_id]
+
+    def wait_for(self, predicate, timeout: float = 60.0) -> None:
+        deadline = time.monotonic() + timeout
+        while not predicate():
+            if time.monotonic() > deadline:
+                seen = {}
+                for edge, _ in self.decayed:
+                    seen[edge.src] = seen.get(edge.src, 0) + 1
+                weights = [(w["src"], round(w["t"], 3), w["expired"]) for w in self.weights]
+                raise AssertionError(f"timed out waiting for the job's output; decayed per entity={seen}, weights={weights}")
+            self.poll(timeout=1.0)
+
+
+def _edge(src: str, t_e: float, protocol: str = "RDP", w_0: float = 1.0) -> Edge:
+    return Edge(src=src, dst="Machine:C1", edge_type="Authentication", protocol=protocol, t_e=t_e, w_0=w_0)
+
+
+@pytest.fixture(scope="module")
+def job():
+    uid = uuid.uuid4().hex[:8]
+    topics = {name: f"t-gnn-test-{uid}.{name}" for name in ("edges", "lambdas", "decayed", "weights")}
+    job_name = f"t-gnn-decay-test-{uid}"
+    ensure_topics(BOOTSTRAP, lambdas_topic=topics["lambdas"],
+                  stream_topics=(topics["edges"], topics["decayed"], topics["weights"]))
+    collector = Collector(tail_consumer([topics["decayed"], topics["weights"]], BOOTSTRAP), topics["decayed"])
+
+    subprocess.run(
+        ["docker", "compose", "exec", "-T", "jobmanager", "flink", "run", "-d", "-py", JOB_PATH_IN_IMAGE,
+         "--job-name", job_name, "--edges-from", "earliest",
+         "--edges-topic", topics["edges"], "--lambdas-topic", topics["lambdas"],
+         "--decayed-topic", topics["decayed"], "--weights-topic", topics["weights"],
+         "--refresh-interval", str(REFRESH_INTERVAL), "--expire-below", str(EXPIRE_BELOW),
+         "--out-of-orderness", "0", "--idleness", "1"],
+        check=True, cwd=REPO_ROOT, capture_output=True,
+    )
+    try:
+        deadline = time.monotonic() + 90
+        while _jobs().get(job_name, {}).get("state") != "RUNNING":
+            assert time.monotonic() < deadline, f"{job_name} never reached RUNNING"
+            time.sleep(1.0)
+        yield {"topics": topics, "collector": collector, "producer": make_producer(BOOTSTRAP)}
+    finally:
+        jid = _jobs().get(job_name, {}).get("jid")
+        if jid:
+            urllib.request.urlopen(urllib.request.Request(f"{FLINK_URL}/jobs/{jid}?mode=cancel", method="PATCH"), timeout=10)
+        collector.consumer.close()
+        admin = AdminClient({"bootstrap.servers": BOOTSTRAP})  # held: its futures die with it
+        for future in admin.delete_topics(list(topics.values())).values():
+            future.result(timeout=10)
+
+
+@pytest.fixture(scope="module")
+def published(job):
+    """Publishes the registry's lambda_p values -- but first sends an edge
+    with nothing published yet, recording what the job did with it."""
+    producer, collector = job["producer"], job["collector"]
+    held = _edge("User:held", t_e=T0)
+    produce_edge(producer, held, topic=job["topics"]["edges"])
+    producer.flush(10)
+    collector.poll(timeout=5.0)
+    before = list(collector.decayed_for("User:held"))
+
+    registry = ProtocolDecayRegistry()
+    publish_lambdas(producer, registry, topic=job["topics"]["lambdas"])
+    collector.wait_for(lambda: collector.decayed_for("User:held"))
+    return {**job, "registry": registry, "held": held, "held_before_publish": before}
+
+
+def test_holds_an_edge_until_a_lambda_is_published(published):
+    assert published["held_before_publish"] == []
+    [(edge, signal)] = published["collector"].decayed_for("User:held")
+    assert edge.edge_id == published["held"].edge_id
+    assert edge.w == 1.0 and signal.sample_count == 1
+
+
+def test_decayed_output_matches_the_in_process_pipeline(published):
+    producer, collector = published["producer"], published["collector"]
+    entity = "User:baseline"
+    edges = [_edge(entity, T0 + 1 + i, protocol="Kerberos", w_0=w_0)
+             for i, w_0 in enumerate([1.0, 0.8, 0.9, 0.3, 1.0, 0.95])]
+    for edge in edges:
+        produce_edge(producer, edge, topic=published["topics"]["edges"])
+    producer.flush(10)
+    collector.wait_for(lambda: len(collector.decayed_for(entity)) == len(edges))
+
+    processor = DecayStreamProcessor(registry=published["registry"])
+    for (edge, signal), sent in zip(collector.decayed_for(entity), edges):
+        expected = processor.process(sent, t=sent.t_e)
+        assert edge.edge_id == sent.edge_id
+        assert edge.w == pytest.approx(expected.edge.w) and edge.w_evaluated_at == expected.edge.w_evaluated_at
+        assert signal.sample_count == expected.deviation.sample_count
+        assert signal.baseline_mean == pytest.approx(expected.deviation.baseline_mean)
+        assert signal.baseline_std == pytest.approx(expected.deviation.baseline_std)
+        assert signal.z_score == pytest.approx(expected.deviation.z_score)
+    assert collector.decayed_for(entity)[-1][1].z_score is not None
+
+
+def test_timer_refreshes_follow_a_hot_reloaded_lambda_to_expiry(published):
+    producer, collector = published["producer"], published["collector"]
+    edges_topic, lambdas_topic = published["topics"]["edges"], published["topics"]["lambdas"]
+    rdp = published["registry"].lambda_for("RDP")
+    tracked = _edge("User:decaying", t_e=T0 + 10)
+
+    def advance_clock_to(t: float) -> None:
+        # Any later edge moves the watermark (out-of-orderness is 0 here).
+        produce_edge(producer, _edge("User:clock", t_e=t, protocol="DNS"), topic=edges_topic)
+        producer.flush(10)
+
+    produce_edge(producer, tracked, topic=edges_topic)
+    advance_clock_to(T0 + 160)
+    collector.wait_for(lambda: len(collector.weights_for(tracked.edge_id)) == 2)
+
+    # Hot reload: a much faster RDP decay, straight into broadcast state.
+    fast = 0.01
+    producer.produce(lambdas_topic, key="RDP", value=json.dumps({"protocol": "RDP", "lambda_p": fast, "published_at": time.time()}))
+    producer.flush(10)
+    time.sleep(5.0)  # no ack from broadcast state; give the update time to land
+
+    advance_clock_to(T0 + 1000)
+    collector.wait_for(lambda: any(w["expired"] for w in collector.weights_for(tracked.edge_id)))
+    collector.poll(timeout=3.0)  # anything after expiry would be a bug
+
+    refreshes = collector.weights_for(tracked.edge_id)
+    expiry = expiry_time(tracked, fast, EXPIRE_BELOW)
+    assert [round(w["t"], 3) for w in refreshes] == [T0 + 70, T0 + 130, T0 + 190, T0 + 250, round(expiry, 3)]
+    assert [w["lambda_p"] for w in refreshes] == [rdp, rdp, fast, fast, fast]
+    assert [w["expired"] for w in refreshes] == [False, False, False, False, True]
+    for w in refreshes:
+        assert w["w"] == pytest.approx(math.exp(-w["lambda_p"] * (w["t"] - tracked.t_e)))
+
