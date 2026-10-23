@@ -32,7 +32,7 @@ Phases 0–8 in `tasks.md` have code (Phase 9, ML training, is planned and not s
 | 8 Tooling follow-ups | `score_entities.py` CLI + a PowerShell doc fix, both real, discovered as gaps while using Phase 7's CLIs. |
 | 9 Machine learning | **Not started** (added 2026-10-19). Train and evaluate the untrained `DynamicTGNN`: problem definition (9.1, needs developer sign-off first), leakage-safe dataset, non-ML baselines it must beat, training, T-GNN evaluation in `pilot.py`, checkpoint loading, calibrated thresholds. Specs.md §4 rules out *replacing the architecture*, not training it; 9.14 (a new architecture) is gated on that. |
 
-**Backlog:** B.3 (`adaptive_calibration.py`), B.4 (fuzzy motif matching), B.5 (sharding), B.6 (`feedback.py`) are real, tested extensions — see Architecture. B.1 (a real Flink job) is done (2026-10-23): containerized PyFlink in a `t-gnn-flink` image (Python 3.10 inside, so the host's 3.12 doesn't matter) plus a Kafka broker in compose. B.2 (Flink backpressure → ε) is next and now unblocked. B.7 (real enterprise-scale NFR validation) is an operational gap like 0.4/7.3 (though `tests/test_load.py` has two opt-in proxy benchmarks via `RUN_HEAVY_LOAD_TEST=1`). B.8 (Mordor/OTRF ingestion adapter) is implemented and tested but deliberately kept off `main`, on `feature/mordor-ingestion`.
+**Backlog:** B.3 (`adaptive_calibration.py`), B.4 (fuzzy motif matching), B.5 (sharding), B.6 (`feedback.py`) are real, tested extensions — see Architecture. B.1 (a real Flink job) is done (2026-10-23): containerized PyFlink in a `t-gnn-flink` image (Python 3.10 inside, so the host's 3.12 doesn't matter) plus a Kafka broker in compose. B.2 (Flink backpressure → ε) is done too: a third `EpsilonController` signal fed by `FlinkBackpressureProbe`. B.7 (real enterprise-scale NFR validation) is an operational gap like 0.4/7.3 (though `tests/test_load.py` has two opt-in proxy benchmarks via `RUN_HEAVY_LOAD_TEST=1`). B.8 (Mordor/OTRF ingestion adapter) is implemented and tested but deliberately kept off `main`, on `feature/mordor-ingestion`.
 
 ### Frontend status (`frontend_implementation` branch — NOT merged to `main`, per developer instruction)
 
@@ -197,7 +197,9 @@ connectivity at collection time and `skip` (not fail) if
 depend on the stack being up. `tests/test_flink_job.py` (B.1) likewise
 skips without Kafka + the Flink REST API. When it runs, it submits its own
 job on throwaway `t-gnn-test-*` topics and cancels/deletes them afterwards,
-leaving the long-running job's topics and watermark alone (~35s).
+leaving the long-running job's topics and watermark alone (~70s). Its last
+test (B.2) deliberately overloads that test job to get real backpressure,
+so it must stay last in the module.
 
 ### Destructive operations on local state — never as housekeeping
 
@@ -255,7 +257,7 @@ broadcast state (design.md §2.2, tasks.md 1.1/1.2).
 
 **Phase 2 — dynamic graph pruning (mixed):**
 - `graph_store.py` (`ActiveGraphStore`) — FR2/NFR3: hash map + per-node adjacency sets, one `RLock`. `to_pyg_edge_index()` materializes current state fresh on every call (Phase 5's forward pass is the intended caller).
-- `pruning.py` (`EpsilonController`, `PruneEventBus`, `PruningWatcher`) — FR2.2/2.3/2.5: epsilon = max(real memory pressure via `psutil`, graph-size pressure) interpolated between `epsilon_min`/`epsilon_max`. `PruningWatcher.run_once(t)` is synchronous/testable; `start()`/`stop()` wrap it in a daemon thread. Cold-storage write happens *before* removal (FR2.4) — failure leaves the edge active for retry. `PruneEventBus` is in-process pub/sub with three real subscribers so far (`MotifEngine.on_prune`, `AuditLogger.log_prune`, `MetricsCollector`).
+- `pruning.py` (`EpsilonController`, `PruneEventBus`, `PruningWatcher`) — FR2.2/2.3/2.5: epsilon = max(real memory pressure via `psutil`, graph-size pressure, Flink backpressure when a probe is wired in — B.2) interpolated between `epsilon_min`/`epsilon_max`. `PruningWatcher.run_once(t)` is synchronous/testable; `start()`/`stop()` wrap it in a daemon thread. Cold-storage write happens *before* removal (FR2.4) — failure leaves the edge active for retry. `PruneEventBus` is in-process pub/sub with three real subscribers so far (`MotifEngine.on_prune`, `AuditLogger.log_prune`, `MetricsCollector`).
 - `cold_storage.py` (`Neo4jColdStorageWriter`, `InMemoryColdStorageWriter`, `BufferedColdStorageWriter`) — FR2.4/FR4.2: real `neo4j` Bolt driver writes of `(Entity)-[:PRUNED_EDGE]->(Entity)` against the compose stack, with indexes on `Entity.id` and `PRUNED_EDGE.pruned_at`. `BufferedColdStorageWriter` (6.4) is a drop-in wrapper added in Phase 6.
 
 **Two ingestion adapters** both produce `Edge` instances (design.md §2.9) — `ingestion/sysmon_adapter.py` (dispatches on Sysmon/Security EventID to reconstruct the two-hop lateral-movement motif; protocol inference is a documented heuristic) and `data/stage_lanl.py` (LANL `auth.txt.gz` → sharded NDJSON `Edge`s). A third source should follow the same pattern: parse into `Edge`, don't invent a parallel representation.
@@ -284,6 +286,7 @@ broadcast state (design.md §2.2, tasks.md 1.1/1.2).
 - `decay_job.py` — the PyFlink job (runs only in the container): `DecayFunction` (KeyedBroadcastProcessFunction keyed by edge id; `λ_p` in broadcast state from the compacted `t-gnn.decay.lambdas` topic; event-time re-evaluation timers every `--refresh-interval` plus exactly at the `--expire-below` crossing) → `BaselineFunction` (keyed by `src|protocol`, EWMA state as JSON). Event time = `t_e`, so output equals `DecayStreamProcessor.process(edge, t=edge.t_e)`. Gotcha: a Python `TimestampAssigner` must go on `assign_timestamps_and_watermarks()` — PyFlink silently ignores it on `from_source()` and falls back to Kafka's wall-clock timestamps.
 - `kafka_io.py` (host, `confluent-kafka`) — topics, `publish_lambdas()`, `tail_consumer()`; `bridge.py` — `FlinkDecayBridge` + `apply_weight_refresh()` (never resurrects a pruned edge) for `run_pipeline.py --decay-backend flink`, which republishes `λ_p` on config reload/adaptive recalibration. Baseline state lives in the job, so it survives pipeline restarts (unlike the in-process path). The job doesn't prune — `PruningWatcher` still owns that.
 - `baseline.py`'s `observe_baseline()` + `EWMABaseline.to_state()/from_state()` were extracted so both paths share one implementation.
+- B.2: `backpressure.py`'s `FlinkBackpressureProbe` (REST, max subtask `ratio` over every operator, None on any failure) → `PruningWatcher(backpressure_probe=)` → `EpsilonController`'s third signal (`backpressure_low`/`high`, default 0.1/0.5). On by default with `--decay-backend flink` (`--ignore-backpressure`).
 
 **Backlog B.3–B.6** (real, tested extensions):
 - `adaptive_calibration.py` (`AdaptiveDecayCalibrator`) — B.3: online counterpart to `calibrate_decay.py`, reapplying its `ln(2)/median_gap` heuristic every N edges, clamped by `max_relative_change`; writes via a new `ProtocolDecayRegistry.update()` (in-memory only).

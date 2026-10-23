@@ -73,9 +73,34 @@ standalone config file for this; it's Python constructor arguments (tasks.md
 | `low_watermark` | no (default 70.0) | System memory % below which memory pressure is 0 |
 | `high_watermark` | no (default 90.0) | System memory % at/above which memory pressure is 1.0; must be `> low_watermark` |
 | `max_edges` | no (default `None`, i.e. no size-pressure signal) | Active Graph Store edge-count ceiling; size pressure = `min(1, edge_count / max_edges)` |
+| `backpressure_low` | no (default 0.1) | Flink backpressure ratio at or below which backpressure adds no pressure (Flink's own "ok" band) |
+| `backpressure_high` | no (default 0.5) | Ratio at or above which backpressure is full pressure (Flink calls > 0.5 "high"); must be `> backpressure_low` |
 
-`compute_epsilon()` takes the *max* of the memory-pressure and size-pressure
-signals, then linearly interpolates between `epsilon_min`/`epsilon_max`.
+`compute_epsilon()` takes the *max* of the memory-pressure, size-pressure and
+backpressure signals, then linearly interpolates between
+`epsilon_min`/`epsilon_max`.
+
+**Backpressure (Backlog B.2)** is design.md §5's mitigation for "Flink
+backpressure during log spikes": prune harder while ingestion can't keep up.
+The reading comes from `PruningWatcher(backpressure_probe=...)`, which is any
+callable returning a 0-1 ratio or `None`. The shipped probe is
+`t_gnn.flink.backpressure.FlinkBackpressureProbe(flink_url, job_name)`. It
+reads `GET /jobs/:jid/vertices/:vid/backpressure` from the Flink REST API and
+takes the highest subtask `ratio` across every operator: the share of each
+second spent blocked on a full downstream buffer. One stalled operator is
+enough to back up the source.
+- `None` (Flink unreachable, job not running, no sample yet) means no
+  pressure, never an error. The probe logs once when it loses Flink and once
+  when it gets it back, like `MotifEngine`'s Redis handling.
+- Each pass costs one request per operator (four for the shipped job). The
+  job/operator lookup is cached for `vertex_cache_seconds` (default 30) and
+  redone after any failure, so a resubmitted job is picked up.
+- Flink refreshes these numbers from its metrics roughly every 10s, so ε
+  responds to a spike within seconds, not instantly.
+- `scripts/run_pipeline.py --decay-backend flink` wires the probe in by
+  default (`--ignore-backpressure` turns it off) and prints
+  `flink_backpressure=` in each metrics line. The in-process backend has
+  no Flink job, so it has no backpressure signal.
 Tuning guidance:
 - Set `max_edges` to whatever RAM budget you've sized the Active Graph
   Store for (design.md §6's open sizing question) — this is the only hard

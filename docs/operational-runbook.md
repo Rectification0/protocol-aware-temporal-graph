@@ -83,7 +83,16 @@ baseline in-process unless it's started with `--decay-backend flink`.
    - The job's `--expire-below` floor only stops its re-evaluations. Edges
      are still pruned by `PruningWatcher` and its dynamic ε.
 6. **Monitor** at http://localhost:8081: job state, per-operator
-   throughput, checkpoints, and each operator's watermark. A watermark
+   throughput, backpressure, checkpoints, and each operator's watermark.
+   The pipeline's metrics line shows the same backpressure reading as
+   `flink_backpressure=` (Backlog B.2). Above 0.1 it starts raising ε, and
+   at 0.5 ε is pinned at `--epsilon-max`, so a burst of prunes during a
+   spike is expected. If backpressure stays high when traffic is normal,
+   the job is undersized: raise `--parallelism` (and
+   `taskmanager.numberOfTaskSlots` if needed), or lengthen
+   `--refresh-interval`, since re-evaluation timers are its main cost.
+   `--ignore-backpressure` takes the signal out of ε while you
+   investigate. A watermark
    stuck at `-9223372036854775808` means no timestamped edge has arrived
    yet.
 7. **Taskmanager died with `OutOfMemoryError: Metaspace`?** That happened

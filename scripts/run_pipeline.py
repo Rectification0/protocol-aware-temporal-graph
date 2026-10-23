@@ -21,6 +21,8 @@ flows through is real, not staged:
     decayed edges, deviation signals and timer-driven weight refreshes come
     back the same way. lambda_p changes (config reloads,
     `--adaptive-calibration`) are published into the job's broadcast state.
+    The job's backpressure also feeds `EpsilonController` (Backlog B.2), so
+    pruning tightens while the job can't keep up with ingestion.
   - `ActiveGraphStore`/`ShardedActiveGraphStore` (2.1) -- real in-memory graph.
   - `PruningWatcher` + `EpsilonController` (2.2/2.3) writing to a real
     Neo4j instance via `BufferedColdStorageWriter`/`Neo4jColdStorageWriter`
@@ -262,6 +264,10 @@ def main() -> None:
                          help="local: decay + baseline in this process (default). flink: hand them to the running "
                               "Flink job over Kafka (Backlog B.1) -- run scripts/submit_flink_job.py first")
     parser.add_argument("--kafka-bootstrap", default=None, help="--decay-backend flink only (default localhost:9092)")
+    parser.add_argument("--flink-url", default="http://localhost:8081",
+                         help="--decay-backend flink only: Flink REST API, read for the job's backpressure (Backlog B.2)")
+    parser.add_argument("--ignore-backpressure", action="store_true",
+                         help="--decay-backend flink only: don't let the job's backpressure raise epsilon")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-ticks", type=int, default=None, help="synthetic mode only: stop after N ticks instead of running until Ctrl+C")
     args = parser.parse_args()
@@ -302,7 +308,7 @@ def main() -> None:
             print(f"ERROR: could not reach Kafka ({exc}). Run `docker compose up -d` first.", file=sys.stderr)
             sys.exit(1)
         print(f"connected to Kafka; published {published} lambda_p value(s) to the Flink job's broadcast state.")
-        if not job_running():
+        if not job_running(args.flink_url):
             print("WARNING: the Flink decay/baseline job isn't running -- edges will queue in Kafka until it is. "
                   "Run `python scripts/submit_flink_job.py`.", file=sys.stderr)
 
@@ -349,9 +355,14 @@ def main() -> None:
     )
 
     epsilon_controller = EpsilonController(epsilon_min=args.epsilon_min, epsilon_max=args.epsilon_max, max_edges=args.max_edges)
+    backpressure_probe = None
+    if flink_bridge is not None and not args.ignore_backpressure:
+        from t_gnn.flink.backpressure import FlinkBackpressureProbe
+
+        backpressure_probe = FlinkBackpressureProbe(args.flink_url)
     watcher = PruningWatcher(
         store=store, decay_engine=processor.decay_engine, epsilon_controller=epsilon_controller,
-        cold_storage=buffered_writer, event_bus=prune_bus,
+        cold_storage=buffered_writer, event_bus=prune_bus, backpressure_probe=backpressure_probe,
     )
 
     inference_engine = TGNNInferenceEngine(store=store, alert_bus=alert_bus)
@@ -437,9 +448,13 @@ def main() -> None:
         snap = metrics.snapshot(now=t)
         if api_state_writer is not None:
             api_state_writer.record_metrics_snapshot(snap, t=t)
+        backpressure = (
+            "" if backpressure_probe is None
+            else f" flink_backpressure={'n/a' if prune_stats.backpressure is None else f'{prune_stats.backpressure:.2f}'}"
+        )
         print(
             f"[t={t:.0f}] metrics: graph_size={snap.active_graph_size} "
-            f"prune_rate={snap.prune_rate_per_second:.2f}/s epsilon={snap.epsilon:.4f} "
+            f"prune_rate={snap.prune_rate_per_second:.2f}/s epsilon={snap.epsilon:.4f}{backpressure} "
             f"motif_hit_rate={snap.motif_hit_rate_per_second:.2f}/s "
             f"motif_reset_rate={snap.motif_reset_rate_per_second:.2f}/s "
             f"inference_latency={snap.latest_inference_latency_seconds * 1000:.2f}ms "

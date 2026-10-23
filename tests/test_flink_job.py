@@ -11,6 +11,7 @@ the Flink REST API (localhost:8081) are up: `docker compose up -d`. Slow-ish
 import json
 import math
 import subprocess
+import threading
 import time
 import urllib.request
 import uuid
@@ -24,6 +25,11 @@ from confluent_kafka.admin import AdminClient  # noqa: E402
 
 from t_gnn.flink.kafka_io import drain, ensure_topics, make_producer, produce_edge, publish_lambdas, tail_consumer  # noqa: E402
 from t_gnn.flink.logic import expiry_time, parse_decayed_record  # noqa: E402
+from t_gnn.flink.backpressure import FlinkBackpressureProbe  # noqa: E402
+from t_gnn.cold_storage import InMemoryColdStorageWriter  # noqa: E402
+from t_gnn.decay import DecayEngine  # noqa: E402
+from t_gnn.graph_store import ActiveGraphStore  # noqa: E402
+from t_gnn.pruning import EpsilonController, PruningWatcher  # noqa: E402
 from t_gnn.protocol_registry import ProtocolDecayRegistry  # noqa: E402
 from t_gnn.schema import Edge  # noqa: E402
 from t_gnn.streaming import DecayStreamProcessor  # noqa: E402
@@ -115,11 +121,16 @@ def job():
         while _jobs().get(job_name, {}).get("state") != "RUNNING":
             assert time.monotonic() < deadline, f"{job_name} never reached RUNNING"
             time.sleep(1.0)
-        yield {"topics": topics, "collector": collector, "producer": make_producer(BOOTSTRAP)}
+        yield {"topics": topics, "collector": collector, "producer": make_producer(BOOTSTRAP), "job_name": job_name}
     finally:
         jid = _jobs().get(job_name, {}).get("jid")
         if jid:
             urllib.request.urlopen(urllib.request.Request(f"{FLINK_URL}/jobs/{jid}?mode=cancel", method="PATCH"), timeout=10)
+            # Wait for the cancel to finish: a still-connected source would
+            # recreate a deleted topic through the broker's auto-creation.
+            deadline = time.monotonic() + 60
+            while _jobs().get(job_name, {}).get("state") != "CANCELED" and time.monotonic() < deadline:
+                time.sleep(1.0)
         collector.consumer.close()
         admin = AdminClient({"bootstrap.servers": BOOTSTRAP})  # held: its futures die with it
         for future in admin.delete_topics(list(topics.values())).values():
@@ -191,7 +202,19 @@ def test_timer_refreshes_follow_a_hot_reloaded_lambda_to_expiry(published):
     fast = 0.01
     producer.produce(lambdas_topic, key="RDP", value=json.dumps({"protocol": "RDP", "lambda_p": fast, "published_at": time.time()}))
     producer.flush(10)
-    time.sleep(5.0)  # no ack from broadcast state; give the update time to land
+    # Broadcast state sends no ack, so confirm the update has landed: a
+    # sentinel edge whose first refresh (t_e + 60) falls inside a small clock
+    # step reports the lambda_p it was decayed with. The steps stay short of
+    # the tracked edge's next timer (T0 + 190), so its sequence is untouched.
+    for k in range(20):
+        sentinel = _edge(f"User:sentinel-{k}", t_e=T0 + 100 + k)
+        produce_edge(producer, sentinel, topic=edges_topic)
+        advance_clock_to(T0 + 165 + k)
+        collector.wait_for(lambda: collector.weights_for(sentinel.edge_id))
+        if collector.weights_for(sentinel.edge_id)[0]["lambda_p"] == fast:
+            break
+    else:
+        raise AssertionError("the hot-reloaded lambda_p never reached broadcast state")
 
     advance_clock_to(T0 + 1000)
     collector.wait_for(lambda: any(w["expired"] for w in collector.weights_for(tracked.edge_id)))
@@ -205,3 +228,56 @@ def test_timer_refreshes_follow_a_hot_reloaded_lambda_to_expiry(published):
     for w in refreshes:
         assert w["w"] == pytest.approx(math.exp(-w["lambda_p"] * (w["t"] - tracked.t_e)))
 
+
+def test_real_backpressure_tightens_epsilon(published):
+    """Backlog B.2 on the live cluster. Must stay the last test in this module:
+    it buries the job in work, which the module teardown then cancels.
+
+    The overload is genuine Flink backpressure, not a stub. Slow-decaying DNS
+    edges each queue tens of thousands of 60s re-evaluations, and one edge far
+    in the future releases all of those timers at once. While the Python
+    decay operator works through them, a background producer keeps feeding
+    the source, which blocks on the full buffers -- what a log spike does."""
+    producer, edges_topic = published["producer"], published["topics"]["edges"]
+    for i in range(200):
+        produce_edge(producer, _edge(f"User:storm-{i}", t_e=T0 + 5_000, protocol="DNS"), topic=edges_topic)
+    produce_edge(producer, _edge("User:clock", t_e=T0 + 5_000 + 4e6, protocol="DNS"), topic=edges_topic)
+    producer.flush(10)
+
+    stop = threading.Event()
+
+    def keep_feeding():
+        feeder = make_producer(BOOTSTRAP)
+        i = 0
+        while not stop.is_set():
+            produce_edge(feeder, _edge(f"User:feed-{i}", t_e=T0 + 5_000 + 4e6 + i, protocol="DNS"), topic=edges_topic)
+            i += 1
+            if i % 500 == 0:
+                feeder.flush(5)
+        feeder.flush(5)
+
+    feeder = threading.Thread(target=keep_feeding, daemon=True)
+    feeder.start()
+    try:
+        watcher = PruningWatcher(
+            store=ActiveGraphStore(), decay_engine=DecayEngine(),
+            epsilon_controller=EpsilonController(epsilon_min=0.05, epsilon_max=0.4),
+            cold_storage=InMemoryColdStorageWriter(), memory_probe=lambda: None,
+            backpressure_probe=FlinkBackpressureProbe(FLINK_URL, job_name=published["job_name"], timeout=5.0),
+        )
+        readings = []
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            stats = watcher.run_once(t=0.0)
+            readings.append(stats.backpressure)
+            if stats.backpressure is not None and stats.backpressure >= 0.5:
+                break
+            time.sleep(2.0)
+        else:
+            raise AssertionError(f"no high backpressure within 120s; readings={readings}")
+    finally:
+        stop.set()
+        feeder.join(timeout=10)
+
+    assert readings[0] is not None  # the probe found the job from the first pass
+    assert stats.epsilon == pytest.approx(0.4)  # backpressure >= 0.5 is full pressure

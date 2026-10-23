@@ -34,9 +34,10 @@ def test_ingest_spike_triggers_epsilon_tightening_then_relaxes_once_calm():
     )
 
     # A burst of 1000 edges arrives before any prune pass has run -- more
-    # volume than the configured 200-edge ceiling, standing in for "Flink
-    # backpressure during a log spike" (no real Flink job exists to
-    # generate literal backpressure). DNS's slow decay means w(e,t) alone
+    # volume than the configured 200-edge ceiling: the spike as the graph
+    # sees it. (The backpressure signal itself is the next test; tests/
+    # test_flink_job.py drives real backpressure on the live cluster.)
+    # DNS's slow decay means w(e,t) alone
     # wouldn't cross even epsilon_min on this timescale, isolating
     # size-pressure-driven tightening from time-decay-driven pruning.
     for i in range(1000):
@@ -51,6 +52,29 @@ def test_ingest_spike_triggers_epsilon_tightening_then_relaxes_once_calm():
     calm_stats = watcher.run_once(t=2.0)  # no further ingest -- pressure has relaxed
 
     assert calm_stats.epsilon < spike_stats.epsilon  # "as usage falls, epsilon relaxes" (design.md 2.5)
+
+
+def test_flink_backpressure_tightens_epsilon_before_the_graph_fills_then_relaxes():
+    # Backlog B.2: the job falling behind is a signal on its own -- epsilon
+    # tightens even though the graph is nowhere near its size ceiling.
+    store = ActiveGraphStore()
+    controller = EpsilonController(epsilon_min=0.01, epsilon_max=0.99, max_edges=10_000)
+    readings = iter([0.9, 0.0])  # a log spike's backpressure, then calm
+    watcher = PruningWatcher(
+        store=store, decay_engine=DecayEngine(), epsilon_controller=controller,
+        cold_storage=InMemoryColdStorageWriter(), memory_probe=lambda: None,
+        backpressure_probe=lambda: next(readings),
+    )
+    for i in range(100):  # weights 0.01..1.0, far below the size ceiling
+        store.upsert(_edge(f"Machine:src-{i}", f"Machine:dst-{i}", protocol="DNS", w_0=(i + 1) / 100))
+
+    spike_stats = watcher.run_once(t=1.0)
+    assert spike_stats.epsilon == 0.99
+    assert spike_stats.pruned == 99  # everything but the w_0=1.0 edge (0.99 has decayed a hair by t=1)
+
+    calm_stats = watcher.run_once(t=2.0)
+    assert calm_stats.epsilon < 0.02  # back to epsilon_min plus the tiny size pressure
+    assert calm_stats.pruned == 0
 
 
 # --- Row 2: "Redis unavailable" -> motif detection disabled, anomaly detection unaffected ---

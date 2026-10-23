@@ -619,6 +619,8 @@ python scripts/run_pipeline.py --source replay --staged-dir data/lanl/simulated/
 | `--config-reload-interval` | `2.0` | Seconds between checks for edits to `config/protocols.yaml`/`config/motifs.yaml`. Changed files are hot-reloaded (logged `CONFIG RELOADED`; a broken file is reported and the last good config kept). `0` disables |
 | `--decay-backend` | `local` | `local` computes decay and the baseline in-process. `flink` sends edges to the running Flink job over Kafka and applies what comes back (Backlog B.1). It needs `pip install -e ".[flink]"` and `scripts/submit_flink_job.py` first, and publishes `λ_p` changes (config reloads, `--adaptive-calibration`) into the job |
 | `--kafka-bootstrap` | `localhost:9092` | `--decay-backend flink` only |
+| `--flink-url` | `http://localhost:8081` | `--decay-backend flink` only: the Flink REST API, read for the job's backpressure |
+| `--ignore-backpressure` | off | `--decay-backend flink` only: keep the job's backpressure out of ε (Backlog B.2). By default it's one of ε's pressure signals |
 | `--seed` | `42` | RNG seed (synthetic mode) |
 | `--max-ticks` | *(none)* | Synthetic mode only: stop after N ticks instead of running until Ctrl+C |
 

@@ -2,8 +2,9 @@
 
 design.md 2.5's three steps map onto `PruningWatcher.run_once()`:
   1. Scan active edges, evaluate w(e,t) < epsilon (2.2) -- epsilon itself
-     computed per-pass by `EpsilonController` from memory pressure and/or
-     graph-size pressure (2.3, FR2.3/NFR3).
+     computed per-pass by `EpsilonController` from memory pressure,
+     graph-size pressure (2.3, FR2.3/NFR3) and, when a probe is wired in,
+     the Flink job's backpressure (Backlog B.2, design.md §5).
   2. On threshold breach: write to cold storage, *then* remove from the
      Active Graph Store (2.4/FR2.4's "before removal" ordering) -- if the
      cold-storage write fails, the edge is left in place to retry on the
@@ -37,6 +38,7 @@ from t_gnn.schema import Edge
 logger = logging.getLogger(__name__)
 
 MemoryProbe = Callable[[], Optional[float]]
+BackpressureProbe = Callable[[], Optional[float]]  # 0-1 ratio, e.g. t_gnn.flink.backpressure.FlinkBackpressureProbe
 
 
 def default_memory_probe() -> Optional[float]:
@@ -56,10 +58,11 @@ def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
 
 
 class EpsilonController:
-    """Computes the dynamic prune threshold epsilon from memory-pressure and/or
-    graph-size pressure (tasks.md 2.3, FR2.3, NFR3).
+    """Computes the dynamic prune threshold epsilon from memory-pressure,
+    graph-size pressure (tasks.md 2.3, FR2.3, NFR3) and ingestion
+    backpressure (Backlog B.2).
 
-    Pressure is the max of two independent 0-1 signals -- whichever is more
+    Pressure is the max of independent 0-1 signals -- whichever is more
     pressing dominates -- since FR2.3 asks for memory-awareness while NFR3
     demands a hard, configurable ceiling on graph *size*, and average
     per-edge memory footprint isn't guaranteed constant enough for a
@@ -67,6 +70,12 @@ class EpsilonController:
       - memory pressure: current system memory % scaled between
         `low_watermark`/`high_watermark`.
       - size pressure: current edge count / `max_edges`, if configured.
+      - backpressure: the Flink job's backpressure ratio (share of time its
+        operators spend blocked) scaled between `backpressure_low`/
+        `backpressure_high`, if a reading is supplied. Flink itself calls
+        <= 0.1 "ok" and > 0.5 "high", hence the defaults. This is design.md
+        §5's "Flink backpressure during log spikes" mitigation: prune
+        harder while ingestion can't keep up.
     epsilon is then interpolated linearly between `epsilon_min` (headroom
     available, prune conservatively) and `epsilon_max` (under pressure,
     prune aggressively).
@@ -79,18 +88,29 @@ class EpsilonController:
         low_watermark: float = 70.0,
         high_watermark: float = 90.0,
         max_edges: Optional[int] = None,
+        backpressure_low: float = 0.1,
+        backpressure_high: float = 0.5,
     ) -> None:
         if epsilon_max < epsilon_min:
             raise ValueError("epsilon_max must be >= epsilon_min")
         if high_watermark <= low_watermark:
             raise ValueError("high_watermark must be > low_watermark")
+        if backpressure_high <= backpressure_low:
+            raise ValueError("backpressure_high must be > backpressure_low")
         self.epsilon_min = epsilon_min
         self.epsilon_max = epsilon_max
         self.low_watermark = low_watermark
         self.high_watermark = high_watermark
         self.max_edges = max_edges
+        self.backpressure_low = backpressure_low
+        self.backpressure_high = backpressure_high
 
-    def compute_epsilon(self, current_edge_count: int, memory_percent: Optional[float] = None) -> float:
+    def compute_epsilon(
+        self,
+        current_edge_count: int,
+        memory_percent: Optional[float] = None,
+        backpressure_ratio: Optional[float] = None,
+    ) -> float:
         mem_pressure = 0.0
         if memory_percent is not None:
             mem_pressure = _clamp((memory_percent - self.low_watermark) / (self.high_watermark - self.low_watermark))
@@ -99,7 +119,13 @@ class EpsilonController:
         if self.max_edges:
             size_pressure = _clamp(current_edge_count / self.max_edges)
 
-        pressure = max(mem_pressure, size_pressure)
+        backpressure = 0.0
+        if backpressure_ratio is not None:
+            backpressure = _clamp(
+                (backpressure_ratio - self.backpressure_low) / (self.backpressure_high - self.backpressure_low)
+            )
+
+        pressure = max(mem_pressure, size_pressure, backpressure)
         return self.epsilon_min + pressure * (self.epsilon_max - self.epsilon_min)
 
 
@@ -139,6 +165,7 @@ class PruningStats:
     pruned: int
     epsilon: float
     write_failures: int = 0
+    backpressure: Optional[float] = None  # the probe's reading this pass, if one is wired in (B.2)
 
 
 class PruningWatcher:
@@ -153,6 +180,7 @@ class PruningWatcher:
         event_bus: Optional[PruneEventBus] = None,
         memory_probe: MemoryProbe = default_memory_probe,
         poll_interval: float = 1.0,
+        backpressure_probe: Optional[BackpressureProbe] = None,
     ) -> None:
         self.store = store
         self.decay_engine = decay_engine
@@ -160,6 +188,7 @@ class PruningWatcher:
         self.cold_storage = cold_storage
         self.event_bus = event_bus or PruneEventBus()
         self.memory_probe = memory_probe
+        self.backpressure_probe = backpressure_probe
         self.poll_interval = poll_interval
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
@@ -168,7 +197,8 @@ class PruningWatcher:
         """One scan-and-prune pass at time t. Synchronous; safe to call
         directly in tests without starting the background thread."""
         edges = self.store.edges()
-        epsilon = self.epsilon_controller.compute_epsilon(len(edges), self.memory_probe())
+        backpressure = self.backpressure_probe() if self.backpressure_probe is not None else None
+        epsilon = self.epsilon_controller.compute_epsilon(len(edges), self.memory_probe(), backpressure)
 
         pruned = 0
         write_failures = 0
@@ -189,7 +219,9 @@ class PruningWatcher:
                 pruned += 1
                 self.event_bus.publish(PrunedEdgeEvent(edge=removed, w_at_prune=w, pruned_at=t))
 
-        return PruningStats(scanned=len(edges), pruned=pruned, epsilon=epsilon, write_failures=write_failures)
+        return PruningStats(
+            scanned=len(edges), pruned=pruned, epsilon=epsilon, write_failures=write_failures, backpressure=backpressure
+        )
 
     def start(self) -> None:
         """Run the scan-and-prune loop on a background daemon thread (2.2/2.6)."""

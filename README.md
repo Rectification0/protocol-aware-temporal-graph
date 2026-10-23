@@ -97,7 +97,9 @@ in-process. `--decay-backend flink` hands that step to a real PyFlink job
 on the compose cluster instead: edges go to it over Kafka, and it returns
 the same decayed edges and deviation signals, plus timer-driven weight
 refreshes. `lambda_p` reaches the job through Flink broadcast state, so a
-config change applies without redeploying the job.
+config change applies without redeploying the job. The job's backpressure
+feeds back into the pruning threshold ε (Backlog B.2), so the pipeline
+prunes harder while the job can't keep up.
 
 ```bash
 pip install -e ".[flink]"              # confluent-kafka, the host's Kafka client
