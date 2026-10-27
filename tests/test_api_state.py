@@ -4,7 +4,7 @@ import psycopg2
 import pytest
 
 from t_gnn.api_state import ApiStateReader, ApiStateWriter, create_api_tables
-from t_gnn.db import get_connection
+from t_gnn.db import assert_test_database, get_test_db_connection, resolve_test_dbname
 from t_gnn.feedback import MotifFeedbackEvent
 from t_gnn.metrics import MetricsSnapshot
 from t_gnn.motif_engine import MotifAlertBus, MotifCompletionEvent, MotifResetBus, MotifResetEvent
@@ -18,7 +18,7 @@ _TABLES = (
 
 def _postgres_reachable() -> bool:
     try:
-        with get_connection() as conn:
+        with get_test_db_connection() as conn:
             conn.close()
         return True
     except psycopg2.OperationalError:
@@ -26,19 +26,26 @@ def _postgres_reachable() -> bool:
 
 
 requires_postgres = pytest.mark.skipif(
-    not _postgres_reachable(), reason="local Postgres (t_gnn_dev) not reachable -- run `docker compose up -d`-adjacent Postgres and `python scripts/init_postgres.py` first",
+    not _postgres_reachable(),
+    reason=f"local Postgres test database ({resolve_test_dbname()}) not reachable -- "
+           "start the local Postgres and run `python scripts/init_postgres.py` first",
 )
 
 
+# Backlog B.9: these tests wipe every API table after each test, so they run
+# against the dedicated test database only -- never t_gnn_dev, which holds
+# the dashboard's data. assert_test_database() re-checks on the server side.
 @pytest.fixture(autouse=True)
 def _clean_tables():
     if not _postgres_reachable():
         yield
         return
-    with get_connection() as conn:
+    with get_test_db_connection() as conn:
+        assert_test_database(conn)
         create_api_tables(conn)
     yield
-    with get_connection() as conn:
+    with get_test_db_connection() as conn:
+        assert_test_database(conn)
         with conn.cursor() as cur:
             for table in _TABLES:
                 cur.execute(f"DELETE FROM {table}")
@@ -47,15 +54,15 @@ def _clean_tables():
 
 @requires_postgres
 def test_create_api_tables_is_idempotent():
-    with get_connection() as conn:
+    with get_test_db_connection() as conn:
         create_api_tables(conn)
         create_api_tables(conn)
 
 
 @requires_postgres
 def test_metrics_snapshot_round_trip():
-    writer = ApiStateWriter(get_connection)
-    reader = ApiStateReader(get_connection)
+    writer = ApiStateWriter(get_test_db_connection)
+    reader = ApiStateReader(get_test_db_connection)
     snapshot = MetricsSnapshot(
         active_graph_size=10, prune_rate_per_second=1.5, epsilon=0.2,
         motif_hit_rate_per_second=0.1, motif_reset_rate_per_second=0.05,
@@ -69,14 +76,14 @@ def test_metrics_snapshot_round_trip():
 
 @requires_postgres
 def test_latest_metrics_snapshot_is_none_when_empty():
-    reader = ApiStateReader(get_connection)
+    reader = ApiStateReader(get_test_db_connection)
     assert reader.latest_metrics_snapshot() is None
 
 
 @requires_postgres
 def test_metrics_snapshot_returns_most_recent():
-    writer = ApiStateWriter(get_connection)
-    reader = ApiStateReader(get_connection)
+    writer = ApiStateWriter(get_test_db_connection)
+    reader = ApiStateReader(get_test_db_connection)
     older = MetricsSnapshot(1, 1.0, 0.1, 0.1, 0.1, 0.1)
     newer = MetricsSnapshot(2, 2.0, 0.2, 0.2, 0.2, 0.2)
 
@@ -88,8 +95,8 @@ def test_metrics_snapshot_returns_most_recent():
 
 @requires_postgres
 def test_entity_score_upserts_latest_value():
-    writer = ApiStateWriter(get_connection)
-    reader = ApiStateReader(get_connection)
+    writer = ApiStateWriter(get_test_db_connection)
+    reader = ApiStateReader(get_test_db_connection)
 
     writer.record_entity_score(InferenceResult(entity_id="User:alice", score=1.0, t=100.0, trigger="scheduled"))
     writer.record_entity_score(InferenceResult(entity_id="User:alice", score=2.5, t=200.0, trigger="motif_completion", motif_name="lateral_pivot"))
@@ -102,8 +109,8 @@ def test_entity_score_upserts_latest_value():
 
 @requires_postgres
 def test_entity_scores_sorted_by_abs_score_descending():
-    writer = ApiStateWriter(get_connection)
-    reader = ApiStateReader(get_connection)
+    writer = ApiStateWriter(get_test_db_connection)
+    reader = ApiStateReader(get_test_db_connection)
 
     writer.record_entity_score(InferenceResult(entity_id="User:a", score=-5.0, t=1.0, trigger="scheduled"))
     writer.record_entity_score(InferenceResult(entity_id="User:b", score=1.0, t=1.0, trigger="scheduled"))
@@ -115,8 +122,8 @@ def test_entity_scores_sorted_by_abs_score_descending():
 
 @requires_postgres
 def test_entity_scores_start_end_filters_on_t_and_count_matches():
-    writer = ApiStateWriter(get_connection)
-    reader = ApiStateReader(get_connection)
+    writer = ApiStateWriter(get_test_db_connection)
+    reader = ApiStateReader(get_test_db_connection)
     writer.record_entity_score(InferenceResult(entity_id="User:old", score=1.0, t=100.0, trigger="scheduled"))
     writer.record_entity_score(InferenceResult(entity_id="User:mid", score=2.0, t=200.0, trigger="scheduled"))
     writer.record_entity_score(InferenceResult(entity_id="User:new", score=3.0, t=300.0, trigger="scheduled"))
@@ -130,8 +137,8 @@ def test_entity_scores_start_end_filters_on_t_and_count_matches():
 
 @requires_postgres
 def test_get_entity_score_round_trip():
-    writer = ApiStateWriter(get_connection)
-    reader = ApiStateReader(get_connection)
+    writer = ApiStateWriter(get_test_db_connection)
+    reader = ApiStateReader(get_test_db_connection)
     writer.record_entity_score(InferenceResult(entity_id="User:alice", score=4.2, t=100.0, trigger="scheduled"))
 
     result = reader.get_entity_score("User:alice")
@@ -142,14 +149,14 @@ def test_get_entity_score_round_trip():
 
 @requires_postgres
 def test_get_entity_score_none_when_never_scored():
-    reader = ApiStateReader(get_connection)
+    reader = ApiStateReader(get_test_db_connection)
     assert reader.get_entity_score("User:nobody") is None
 
 
 @requires_postgres
 def test_motif_completion_round_trip():
-    writer = ApiStateWriter(get_connection)
-    reader = ApiStateReader(get_connection)
+    writer = ApiStateWriter(get_test_db_connection)
+    reader = ApiStateReader(get_test_db_connection)
     event = MotifCompletionEvent(
         motif_name="lateral_pivot", chain_key="Machine:C1042",
         matched_edges=["e1", "e2"], completed_at=123.0, confidence=0.9,
@@ -166,8 +173,8 @@ def test_motif_completion_round_trip():
 
 @requires_postgres
 def test_motif_completion_filters_by_motif_name():
-    writer = ApiStateWriter(get_connection)
-    reader = ApiStateReader(get_connection)
+    writer = ApiStateWriter(get_test_db_connection)
+    reader = ApiStateReader(get_test_db_connection)
     writer.record_motif_completion(MotifCompletionEvent("lateral_pivot", "Machine:C1042", ["e1"], 1.0))
     writer.record_motif_completion(MotifCompletionEvent("admin_share_escalation", "User:svc", ["e2"], 2.0))
 
@@ -179,8 +186,8 @@ def test_motif_completion_filters_by_motif_name():
 
 @requires_postgres
 def test_motif_completions_start_end_filters_on_completed_at_and_count_matches():
-    writer = ApiStateWriter(get_connection)
-    reader = ApiStateReader(get_connection)
+    writer = ApiStateWriter(get_test_db_connection)
+    reader = ApiStateReader(get_test_db_connection)
     writer.record_motif_completion(MotifCompletionEvent("lateral_pivot", "Machine:C1", ["e1"], 100.0))
     writer.record_motif_completion(MotifCompletionEvent("lateral_pivot", "Machine:C2", ["e2"], 200.0))
     writer.record_motif_completion(MotifCompletionEvent("lateral_pivot", "Machine:C3", ["e3"], 300.0))
@@ -195,8 +202,8 @@ def test_motif_completions_start_end_filters_on_completed_at_and_count_matches()
 
 @requires_postgres
 def test_motif_completions_filters_by_chain_key():
-    writer = ApiStateWriter(get_connection)
-    reader = ApiStateReader(get_connection)
+    writer = ApiStateWriter(get_test_db_connection)
+    reader = ApiStateReader(get_test_db_connection)
     writer.record_motif_completion(MotifCompletionEvent("lateral_pivot", "Machine:C1", ["e1"], 1.0))
     writer.record_motif_completion(MotifCompletionEvent("lateral_pivot", "Machine:C2", ["e2"], 2.0))
 
@@ -208,8 +215,8 @@ def test_motif_completions_filters_by_chain_key():
 
 @requires_postgres
 def test_motif_reset_round_trip():
-    writer = ApiStateWriter(get_connection)
-    reader = ApiStateReader(get_connection)
+    writer = ApiStateWriter(get_test_db_connection)
+    reader = ApiStateReader(get_test_db_connection)
     event = MotifResetEvent(
         motif_name="lateral_pivot", chain_key="Machine:C1042",
         triggering_edge_id="e1", matched_edges=["e1"], reset_at=50.0,
@@ -224,8 +231,8 @@ def test_motif_reset_round_trip():
 
 @requires_postgres
 def test_motif_feedback_round_trip_creates_user():
-    writer = ApiStateWriter(get_connection)
-    reader = ApiStateReader(get_connection)
+    writer = ApiStateWriter(get_test_db_connection)
+    reader = ApiStateReader(get_test_db_connection)
     event = MotifFeedbackEvent(
         motif_name="lateral_pivot", chain_key="Machine:C1042",
         disposition="true_positive", noted_at=time.time(), analyst="alice",
@@ -240,7 +247,7 @@ def test_motif_feedback_round_trip_creates_user():
 
     # a second disposition from the same analyst reuses the same user row
     writer.record_motif_feedback(MotifFeedbackEvent("lateral_pivot", "Machine:C1043", "false_positive", time.time(), analyst="alice"))
-    with get_connection() as conn:
+    with get_test_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT count(*) FROM users WHERE username = 'alice'")
             assert cur.fetchone()[0] == 1
@@ -248,8 +255,8 @@ def test_motif_feedback_round_trip_creates_user():
 
 @requires_postgres
 def test_motif_feedback_without_analyst_leaves_null_attribution():
-    writer = ApiStateWriter(get_connection)
-    reader = ApiStateReader(get_connection)
+    writer = ApiStateWriter(get_test_db_connection)
+    reader = ApiStateReader(get_test_db_connection)
     writer.record_motif_feedback(MotifFeedbackEvent("lateral_pivot", "Machine:C1042", "true_positive", time.time()))
 
     records = reader.list_motif_feedback(limit=10)
@@ -260,8 +267,8 @@ def test_motif_feedback_without_analyst_leaves_null_attribution():
 def test_motif_completions_since_returns_only_newer_rows_ascending():
     """F0.10's SSE poll cursor: `since`-by-id, ascending, not the DESC
     "recent page" `list_motif_completions` returns for a one-shot listing."""
-    writer = ApiStateWriter(get_connection)
-    reader = ApiStateReader(get_connection)
+    writer = ApiStateWriter(get_test_db_connection)
+    reader = ApiStateReader(get_test_db_connection)
     writer.record_motif_completion(MotifCompletionEvent("lateral_pivot", "Machine:C1042", ["e1"], 1.0))
     writer.record_motif_completion(MotifCompletionEvent("admin_share_escalation", "User:svc", ["e2"], 2.0))
     first_id = reader.list_motif_completions(limit=10)[-1].id  # oldest of the two just written
@@ -274,8 +281,8 @@ def test_motif_completions_since_returns_only_newer_rows_ascending():
 
 @requires_postgres
 def test_motif_completions_since_zero_returns_everything():
-    writer = ApiStateWriter(get_connection)
-    reader = ApiStateReader(get_connection)
+    writer = ApiStateWriter(get_test_db_connection)
+    reader = ApiStateReader(get_test_db_connection)
     writer.record_motif_completion(MotifCompletionEvent("lateral_pivot", "Machine:C1042", ["e1"], 1.0))
 
     assert len(reader.list_motif_completions_since(0)) == 1
@@ -283,8 +290,8 @@ def test_motif_completions_since_zero_returns_everything():
 
 @requires_postgres
 def test_motif_resets_since_returns_only_newer_rows():
-    writer = ApiStateWriter(get_connection)
-    reader = ApiStateReader(get_connection)
+    writer = ApiStateWriter(get_test_db_connection)
+    reader = ApiStateReader(get_test_db_connection)
     writer.record_motif_reset(MotifResetEvent("lateral_pivot", "Machine:C1042", "e1", ["e1"], 1.0))
     writer.record_motif_reset(MotifResetEvent("lateral_pivot", "Machine:C1043", "e2", ["e2"], 2.0))
     first_id = reader.list_motif_resets(limit=10)[-1].id
@@ -297,8 +304,8 @@ def test_motif_resets_since_returns_only_newer_rows():
 
 @requires_postgres
 def test_entity_scores_since_returns_only_rows_updated_after_cursor():
-    writer = ApiStateWriter(get_connection)
-    reader = ApiStateReader(get_connection)
+    writer = ApiStateWriter(get_test_db_connection)
+    reader = ApiStateReader(get_test_db_connection)
     writer.record_entity_score(InferenceResult(entity_id="User:alice", score=1.0, t=1.0, trigger="scheduled"))
     cursor = time.time()
     writer.record_entity_score(InferenceResult(entity_id="User:bob", score=2.0, t=2.0, trigger="scheduled"))
@@ -312,8 +319,8 @@ def test_entity_scores_since_returns_only_rows_updated_after_cursor():
 
 @requires_postgres
 def test_alert_acknowledgement_round_trip():
-    writer = ApiStateWriter(get_connection)
-    reader = ApiStateReader(get_connection)
+    writer = ApiStateWriter(get_test_db_connection)
+    reader = ApiStateReader(get_test_db_connection)
 
     writer.record_alert_acknowledgement(
         detection_type="motif_completion", detection_ref="lateral_pivot:Machine:C1042:123.0",
@@ -328,8 +335,8 @@ def test_alert_acknowledgement_round_trip():
 
 @requires_postgres
 def test_average_response_time_uses_the_detection_ref_embedded_timestamp():
-    writer = ApiStateWriter(get_connection)
-    reader = ApiStateReader(get_connection)
+    writer = ApiStateWriter(get_test_db_connection)
+    reader = ApiStateReader(get_test_db_connection)
     detected_at = 1_000.0
     ack_time = detected_at + 45.0
 
@@ -355,7 +362,7 @@ def test_average_response_time_is_none_when_empty():
     # This assertion only holds when this is the very first acknowledgement
     # ever recorded for this dev database -- skip if that's not the case
     # rather than asserting something false about a shared, uncleaned table.
-    reader = ApiStateReader(get_connection)
+    reader = ApiStateReader(get_test_db_connection)
     if reader.list_alert_acknowledgements(limit=1):
         pytest.skip("alert_acknowledgements already has rows from a prior run -- can't assert emptiness")
 
@@ -370,8 +377,8 @@ def test_writer_auto_subscribes_to_buses():
     alert_bus = MotifAlertBus()
     reset_bus = MotifResetBus()
     result_bus = InferenceResultBus()
-    ApiStateWriter(get_connection, alert_bus=alert_bus, reset_bus=reset_bus, result_bus=result_bus)
-    reader = ApiStateReader(get_connection)
+    ApiStateWriter(get_test_db_connection, alert_bus=alert_bus, reset_bus=reset_bus, result_bus=result_bus)
+    reader = ApiStateReader(get_test_db_connection)
 
     alert_bus.publish(MotifCompletionEvent("lateral_pivot", "Machine:C1042", ["e1"], 1.0))
     reset_bus.publish(MotifResetEvent("lateral_pivot", "Machine:C1042", "e1", ["e1"], 2.0))
@@ -401,8 +408,8 @@ def test_writer_degrades_gracefully_when_postgres_unreachable():
 @requires_postgres
 def test_config_change_round_trip_with_attribution():
     """Frontend Backlog FB.1's audit trail."""
-    writer = ApiStateWriter(get_connection)
-    reader = ApiStateReader(get_connection)
+    writer = ApiStateWriter(get_test_db_connection)
+    reader = ApiStateReader(get_test_db_connection)
 
     assert writer.ping() is True
     assert writer.record_config_change("protocol", "SMB", "lambda_p", 0.000004, 0.00002, "alice", 100.0)

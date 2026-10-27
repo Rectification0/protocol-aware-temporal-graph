@@ -745,8 +745,11 @@ nginx proxy at `http://localhost:8080`. See
 Idempotently creates the local dev Postgres database (`t_gnn_dev`) and,
 on this branch, the frontend API layer's tables within it (`users`,
 `metrics_snapshots`, `entity_scores`, `motif_completions`, `motif_resets`,
-`motif_feedback`, `alert_acknowledgements` — DDL owned by
-`t_gnn.api_state.create_api_tables()`). Postgres itself is not part of the
+`motif_feedback`, `alert_acknowledgements`, `config_changes` — DDL owned by
+`t_gnn.api_state.create_api_tables()`). It does the same for the test
+database (`t_gnn_test`, or `PGTEST_DATABASE`), which only the
+Postgres-backed tests use. They wipe their tables after every test, so they
+never run against `t_gnn_dev` (Backlog B.9). Postgres itself is not part of the
 detection pipeline; it's used for persistence needs that don't map to
 Neo4j/Redis/Flink's roles (see `CLAUDE.md`'s "Local dev database"
 section) — the API layer's read/write bridge to `run_pipeline.py` is

@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import psycopg2  # noqa: E402
 
 from t_gnn.api_state import create_api_tables  # noqa: E402
-from t_gnn.db import connection_params, get_connection  # noqa: E402
+from t_gnn.db import connection_params, get_connection, resolve_test_dbname  # noqa: E402
 
 
 def _ensure_database_exists(target_db: str) -> None:
@@ -45,13 +45,15 @@ def _ensure_database_exists(target_db: str) -> None:
 
 
 def main() -> None:
-    target_db = connection_params()["dbname"]
-    _ensure_database_exists(target_db)
-
-    with get_connection(dbname=target_db) as conn:
-        create_api_tables(conn)
-    print("frontend API tables ready (users, metrics_snapshots, entity_scores, "
-          "motif_completions, motif_resets, motif_feedback, alert_acknowledgements)")
+    # Backlog B.9: the test database is created alongside the dev one, so
+    # tests/test_api_state.py's per-test wipe never touches t_gnn_dev.
+    for target_db in (connection_params()["dbname"], resolve_test_dbname()):
+        _ensure_database_exists(target_db)
+        with get_connection(dbname=target_db) as conn:
+            create_api_tables(conn)
+        print(f"frontend API tables ready in {target_db!r} (users, metrics_snapshots, "
+              "entity_scores, motif_completions, motif_resets, motif_feedback, "
+              "alert_acknowledgements, config_changes)")
 
 
 if __name__ == "__main__":

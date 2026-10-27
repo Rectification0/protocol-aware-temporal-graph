@@ -52,7 +52,7 @@ Backlog B.8 (a Mordor/OTRF-Security-Datasets ingestion adapter, `stage_mordor`) 
 cp .env.example .env       # then edit .env with your local credentials
 pip install -e ".[dev]"
 docker compose up -d       # Flink UI :8081, Kafka :9092, Neo4j :7474/7687, Redis :6379
-python scripts/init_postgres.py   # optional: creates the t_gnn_dev Postgres database
+python scripts/init_postgres.py   # optional: creates the t_gnn_dev and t_gnn_test (tests only) Postgres databases
 ```
 
 `docker-compose.yml` brings up the Flink/Kafka/Redis/Neo4j stack that Phase 2's

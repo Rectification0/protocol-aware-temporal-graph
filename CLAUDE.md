@@ -138,7 +138,7 @@ pip install -e ".[dev]"                 # install package + pytest
 pytest                                   # run full test suite
 pytest tests/test_schema.py              # run one test file
 pytest tests/test_schema.py::test_round_trip_json   # run one test
-python scripts/init_postgres.py          # idempotent: create the t_gnn_dev database
+python scripts/init_postgres.py          # idempotent: create the t_gnn_dev and t_gnn_test databases (+ API tables)
 python -m t_gnn.data.stage_lanl --input <auth.txt.gz> --output <dir>   # stage LANL dataset
 python -m t_gnn.data.calibrate_decay --staged-dir <dir> [--output report.json]   # suggest lambda_p per protocol from staged edges
 python -m t_gnn.data.simulate_traffic --output-dir <dir> [--num-users 200] [--num-machines 50] [--days 7] [--seed 42]   # generate synthetic labeled traffic for pilot.py
@@ -222,11 +222,16 @@ Two real incidents behind this rule (2026-10-19):
   plain `docker compose ps` lists only *running* containers, so stopped
   ones looked absent. Volumes survived, and `docker compose up -d` brought
   everything back. Check `docker compose ps -a`, and prefer `stop`.
-- `tests/test_api_state.py`'s autouse fixture runs `DELETE FROM` on every
+- `tests/test_api_state.py`'s autouse fixture ran `DELETE FROM` on every
   API table in the **real** `t_gnn_dev` database after each test, so a
-  plain `pytest` wipes the dashboard's data. Until the tests use a
-  separate database, run `pytest --ignore=tests/test_api_state.py` unless
-  the developer okays the wipe. Say so whenever you run it.
+  plain `pytest` wiped the dashboard's data. Fixed by Backlog B.9
+  (2026-10-27): those tests now use a dedicated `t_gnn_test` database
+  (`PGTEST_DATABASE`, created by `scripts/init_postgres.py`) through
+  `db.get_test_db_connection()`, and the cleanup calls
+  `db.assert_test_database()`. That checks the server's
+  `current_database()` and refuses anything that doesn't end in `_test`
+  or is the dev database. A plain `pytest` is safe again. New tests that
+  write to Postgres must use the same pair, never `get_connection()`.
 
 Connection settings load from `.env` (auto-loaded by `t_gnn/db.py`, gitignored,
 holds real credentials) with `.env.example` as the committed placeholder
