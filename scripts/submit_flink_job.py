@@ -26,7 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from t_gnn.flink.kafka_io import DEFAULT_BOOTSTRAP, ensure_topics, make_producer, publish_lambdas  # noqa: E402
-from t_gnn.flink.logic import JOB_NAME  # noqa: E402
+from t_gnn.flink.logic import EDGES_TOPIC, JOB_NAME  # noqa: E402
 from t_gnn.protocol_registry import ProtocolDecayRegistry  # noqa: E402
 
 JOB_PATH_IN_IMAGE = "/opt/t_gnn/src/t_gnn/flink/decay_job.py"
@@ -49,11 +49,14 @@ def main() -> None:
     parser.add_argument("--bootstrap-servers", default=DEFAULT_BOOTSTRAP, help="Kafka, as the host sees it")
     parser.add_argument("--replace", action="store_true", help="cancel a running copy of the job, then submit")
     parser.add_argument("--wait", type=float, default=60.0, help="seconds to wait for the job to reach RUNNING")
+    parser.add_argument("--edge-partitions", type=int, default=1,
+                        help="partitions for the edges topic if this creates it: match the job's --parallelism "
+                             "(Backlog B.11). An existing topic keeps its partitions")
     parser.add_argument("job_args", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     job_args = args.job_args[1:] if args.job_args[:1] == ["--"] else args.job_args
 
-    ensure_topics(args.bootstrap_servers)
+    ensure_topics(args.bootstrap_servers, partitions={EDGES_TOPIC: args.edge_partitions})
     count = publish_lambdas(make_producer(args.bootstrap_servers), ProtocolDecayRegistry())
     print(f"topics ready; published {count} lambda_p record(s)")
 

@@ -40,7 +40,7 @@ numbers before and after.
 | Motif fast path (5.3), ordinary traffic | ≤ 5 ms p99 at any size (B.10 budget) | p99 1.1–2.7 ms, flat from 1k to 100k edges | **Within budget** |
 | Motif fast path (5.3), through a hub | ≤ 5 ms p99 at any size (B.10 budget) | p99 2.1 ms at 10k edges, 8.4 ms at 50k, 18.7 ms at 100k | **Missed** at 50k and above. Needs a subgraph cap (Backlog B.13) |
 | NFR2, in-process pipeline | ≥ 1 B events/day | 11,600 edges/s ≈ 1.0 B/day on 2026-10-23; ~24,000 edges/s ≈ 2.1 B/day on 2026-10-27 (same machine, less loaded, B.10 code) | **Borderline to met**, and only with no Redis, Neo4j or inference in the loop |
-| NFR2, Flink job | ≥ 1 B events/day, bounded queue | Bounded up to ~600 edges/s (~52 M/day); saturates ~660/s | **Not met**: about 5% of the floor at parallelism 1 |
+| NFR2, Flink job | ≥ 1 B events/day, bounded queue | B.7: ~600 edges/s (~52 M/day). B.11: 1,600/s sustained (~138 M/day), saturating ~2,000–2,270/s | **Not met**: about 14% of the floor |
 
 ## B.10: NFR1 rework (2026-10-27)
 
@@ -131,6 +131,66 @@ The score lookup is in-process. The dashboard's own lookup
 (`GET /api/scores/entities/{id}`) goes through Postgres in the separate API
 process, so this number doesn't cover it.
 
+## B.11: Flink throughput (2026-10-27)
+
+The decay operator was keyed by edge id (design.md 2.1), so every edge was a
+new state key and PyFlink's state cache never hit, and re-keying by
+(entity, protocol) for the baseline cost a second Python↔JVM hop per edge.
+B.11 fuses decay and baseline into one operator keyed by (entity, protocol)
+(`DecayBaselineFunction`). A key's live edges sit in refresh buckets by due
+time, so a firing timer touches only the edges due then. Output is
+unchanged: `tests/test_flink_job.py` still checks it equals the in-process
+pipeline's.
+
+Measured on 2026-10-27, offered 30 s per rate (sustained = the backlog stayed
+bounded and ≥ 95% of the rate was processed):
+
+| Job | Taskmanagers | Edges partitions | Sustained | Saturates at |
+|---|---:|---:|---:|---:|
+| Before B.11, parallelism 1 | 1 | 1 | 800/s | ~940/s |
+| B.11, parallelism 1 | 1 | 1 | **1,600/s** (≈ 138 M/day) | ~2,000/s |
+| B.11, parallelism 2 | 1 | 1 | 800/s | ~1,050/s |
+| B.11, parallelism 4 | 1 | 1 | < 800/s | ~830/s |
+| B.11, parallelism 2 | 2 | 1 | 1,600/s | ~2,100/s |
+| B.11, parallelism 2 | 2 | 2 | 1,600/s (2,400/s at 95%, just under) | ~2,270/s |
+
+(The B.7 table below measured ~600/s for the old job on a slower day; the
+first row is the same job measured today.)
+
+- **The re-key doubled throughput** at parallelism 1.
+- **More slots in one taskmanager make it slower.** In thread mode a
+  taskmanager runs one Python interpreter, so its subtasks share one GIL and
+  add cross-thread shuffles. Scaling needs more taskmanager *processes*:
+  `docker compose up -d --scale taskmanager=N`, with
+  `cluster.evenly-spread-out-slots: true` (now in `docker-compose.yml`) so a
+  job's subtasks land one per taskmanager instead of filling the first.
+- **Even then it scales weakly** (+10–15% for a second taskmanager). Flink's
+  busy metrics at 2,400/s showed the source chain (Kafka source, the Python
+  timestamp assigner and the key selector, each parsing the JSON) 77% busy
+  and sharing an interpreter with one decay subtask, which was pegged. An
+  edges partition per subtask (`--edge-partitions`, defaulting to
+  `--parallelism` in the benchmark) spreads the parsing and gave the last
+  step. The Docker VM's CPU share and the benchmark's own producer and
+  consumer, in one container, may be limits too; this setup can't separate
+  them.
+- **NFR2 is still far off:** ~138 M/day sustained is about 14% of the 1 B/day
+  floor. What's left: producing edges with the Kafka record timestamp set to
+  `t_e` so the timestamp assigner can be Flink's built-in one (no Python per
+  record at the source), a Java decay operator, or many more taskmanagers.
+
+Three PyFlink thread-mode gotchas found on the way:
+- A taskmanager keeps every Python module it has imported for its whole
+  lifetime, so after changing the job's code restart the taskmanagers before
+  `submit_flink_job.py --replace`, or the new job runs stale code.
+- `ctx.current_processing_time()` crash-looped the job on a freshly started
+  second taskmanager (pemja: "error return without exception set"). The job
+  now uses wall-clock `time.time()`, which is what processing time is.
+- Adding `with_idleness()` to the edges watermark (with its Python timestamp
+  assigner) stalled the job almost completely, so it isn't used. With
+  several edges partitions every partition must keep receiving edges, or the
+  watermark, and every refresh timer with it, waits on the quiet one. Edges
+  are keyed by user, so with real traffic every partition stays busy.
+
 ## NFR1: inference latency (B.7, 2026-10-23, before B.10)
 
 `TGNNInferenceEngine.run_once()` is the scheduled pass and
@@ -218,6 +278,7 @@ The job sustains **~600 edges/s ≈ 52 M events/day**, about 5% of the NFR2
 floor, and saturates around 660/s. Flink reports the `decay` operator 100%
 busy. The cost is Python per record, chiefly keyed-state access: the
 operator is keyed by edge id (design.md 2.1), so every edge is a new key.
+B.11 re-keyed it (see above).
 
 ## Bugs the benchmark found (all fixed)
 

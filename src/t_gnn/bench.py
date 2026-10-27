@@ -231,13 +231,13 @@ def bench_ingest(n_edges: int = 100_000, prune_every: int = 1000, seed: int = 0,
 
 
 def bench_flink(rates: list[int], duration: float = 30.0, drain_timeout: float = 120.0, job_args: Optional[list[str]] = None,
-                log=print) -> dict:
+                edge_partitions: int = 1, log=print) -> dict:
     from t_gnn.flink.harness import IsolatedJob
     from t_gnn.flink.kafka_io import drain, make_producer, produce_edge, publish_lambdas, tail_consumer
     from t_gnn.protocol_registry import ProtocolDecayRegistry
 
     runs = []
-    with IsolatedJob("t-gnn-bench", job_args) as job:
+    with IsolatedJob("t-gnn-bench", job_args, edge_partitions=edge_partitions) as job:
         consumer = tail_consumer([job.topics["decayed"]])
         producer = make_producer()
         publish_lambdas(producer, ProtocolDecayRegistry(), topic=job.topics["lambdas"])
@@ -325,7 +325,8 @@ def bench_flink(rates: list[int], duration: float = 30.0, drain_timeout: float =
         "max_sustained_events_per_day": best * SECONDS_PER_DAY,
         "target_events_per_day": NFR2_EVENTS_PER_DAY,
         "job_args": job_args or [],
-        "note": "one taskmanager, job parallelism as given in job_args (default 1)",
+        "edge_partitions": edge_partitions,
+        "note": "job parallelism as given in job_args (default 1); taskmanagers as the compose cluster has them",
     }
 
 
@@ -353,6 +354,8 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument("--rates", default="1000,2000,5000,10000", help="flink: offered edges/second, one run each")
     parser.add_argument("--duration", type=float, default=30.0, help="flink: seconds to offer each rate")
     parser.add_argument("--parallelism", type=int, default=1, help="flink: the job's operator parallelism")
+    parser.add_argument("--edge-partitions", type=int, default=None,
+                        help="flink: partitions for the throwaway edges topic (default: --parallelism, Backlog B.11)")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--output", default=None, help="write the full JSON report here")
     args = parser.parse_args(argv)
@@ -365,7 +368,8 @@ def main(argv: Optional[list[str]] = None) -> None:
         report["nfr2_ingest_in_process"] = bench_ingest(args.edges, args.prune_every, args.seed)
     if args.command in ("flink", "all"):
         report["nfr2_flink"] = bench_flink([int(r) for r in args.rates.split(",")], args.duration,
-                                           job_args=["--parallelism", str(args.parallelism)])
+                                           job_args=["--parallelism", str(args.parallelism)],
+                                           edge_partitions=args.edge_partitions or args.parallelism)
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)

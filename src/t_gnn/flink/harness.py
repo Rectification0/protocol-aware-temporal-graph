@@ -61,6 +61,7 @@ class IsolatedJob:
         bootstrap: str = DEFAULT_BOOTSTRAP,
         flink_url: str = DEFAULT_FLINK_URL,
         start_timeout: float = 90.0,
+        edge_partitions: int = 1,
     ) -> None:
         uid = uuid.uuid4().hex[:8]
         self.name = f"{prefix}-{uid}"
@@ -69,10 +70,12 @@ class IsolatedJob:
         self.bootstrap = bootstrap
         self.flink_url = flink_url
         self.start_timeout = start_timeout
+        self.edge_partitions = edge_partitions  # B.11: one per job subtask
 
     def __enter__(self) -> "IsolatedJob":
         ensure_topics(self.bootstrap, lambdas_topic=self.topics["lambdas"],
-                      stream_topics=(self.topics["edges"], self.topics["decayed"], self.topics["weights"]))
+                      stream_topics=(self.topics["edges"], self.topics["decayed"], self.topics["weights"]),
+                      partitions={self.topics["edges"]: self.edge_partitions})
         try:
             subprocess.run(
                 ["docker", "compose", "exec", "-T", "jobmanager", "flink", "run", "-d", "-py", JOB_PATH_IN_IMAGE,

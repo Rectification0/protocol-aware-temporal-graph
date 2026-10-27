@@ -232,5 +232,9 @@ def test_real_backpressure_tightens_epsilon(published):
         stop.set()
         feeder.join(timeout=10)
 
-    assert readings[0] is not None  # the probe found the job from the first pass
+    # Flink often has no backpressure sample yet on the first request (the
+    # request is what starts sampling), so leading Nones are expected. Once
+    # the probe has a reading it must keep getting them.
+    first = next(i for i, r in enumerate(readings) if r is not None)
+    assert all(r is not None for r in readings[first:])
     assert stats.epsilon == pytest.approx(0.4)  # backpressure >= 0.5 is full pressure

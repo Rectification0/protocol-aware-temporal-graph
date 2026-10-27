@@ -64,9 +64,25 @@ baseline in-process unless it's started with `--decay-backend flink`.
    --decay-backend flink`. On exit, the pipeline waits up to 15s for every
    edge it sent to come back. If some don't, it warns with the count.
 3. **After changing the job's code** (`src/t_gnn/flink/` or the modules it
-   imports): `python scripts/submit_flink_job.py --replace`. The containers
-   mount `./src` read-only, so no rebuild is needed. Rebuild (`docker
+   imports): `docker compose restart taskmanager`, then `python
+   scripts/submit_flink_job.py --replace`. The containers mount `./src`
+   read-only, so no rebuild is needed. The restart is not optional: the
+   job runs in PyFlink's thread mode, where the taskmanager's embedded
+   Python interpreter keeps every module it has imported for its whole
+   lifetime, so a resubmitted job would run the old code. The usual
+   symptom is an `AttributeError: Can't get attribute ...` on
+   `t_gnn.flink.logic` in `docker compose logs taskmanager`. Restarting
+   the taskmanager fails over any running job, which `--replace` then
+   replaces. Rebuild (`docker
    compose up -d --build`) only after changing `docker/flink.Dockerfile`.
+   **Scaling out** (Backlog B.11): add taskmanagers, not slots. In thread
+   mode each taskmanager is one Python interpreter, so two subtasks in one
+   taskmanager share its GIL and run slower than one. `docker compose up -d
+   --scale taskmanager=N`, then submit with `-- --parallelism N`. Give the
+   edges topic N partitions when it's first created
+   (`submit_flink_job.py --edge-partitions N`); an existing topic keeps its
+   partitions. `cluster.evenly-spread-out-slots` (set in compose) places one
+   subtask per taskmanager.
 4. **If the job disappears:** recreating the jobmanager container (an
    image rebuild, `docker compose up` after a compose change) drops
    submitted jobs, because the dev cluster has no HA. Run the submit

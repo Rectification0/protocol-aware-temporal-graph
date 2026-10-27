@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 import os
 import time
-from typing import Iterable, Iterator, Optional
+from typing import Iterable, Iterator, Mapping, Optional
 
 from confluent_kafka import OFFSET_END, Consumer, KafkaException, Producer, TopicPartition
 from confluent_kafka.admin import AdminClient, NewTopic
@@ -28,16 +28,24 @@ def ensure_topics(
     lambdas_topic: str = LAMBDAS_TOPIC,
     stream_topics: Iterable[str] = (EDGES_TOPIC, DECAYED_TOPIC, WEIGHTS_TOPIC),
     timeout: float = 10.0,
+    partitions: Optional[Mapping[str, int]] = None,
 ) -> None:
     """Create the job's topics if missing. The lambdas topic is compacted:
     only the newest lambda_p per protocol matters, and the job re-reads the
-    whole topic on every start to rebuild its broadcast state. One partition
-    each keeps the edge stream (and the event-time watermark) in order."""
+    whole topic on every start to rebuild its broadcast state.
+
+    One partition per topic unless `partitions` says otherwise (Backlog
+    B.11): give the edges topic one per job subtask, so each source subtask
+    parses its own share instead of one doing all of it. Edges are produced
+    keyed by `src`, so every (entity, protocol) key still arrives in order.
+    An existing topic is left as it is: adding partitions later would move
+    keys between them mid-stream."""
+    partitions = partitions or {}
     admin = AdminClient({"bootstrap.servers": bootstrap})
     existing = set(admin.list_topics(timeout=timeout).topics)
     wanted = [
         NewTopic(lambdas_topic, num_partitions=1, replication_factor=1, config={"cleanup.policy": "compact"}),
-        *(NewTopic(t, num_partitions=1, replication_factor=1) for t in stream_topics),
+        *(NewTopic(t, num_partitions=partitions.get(t, 1), replication_factor=1) for t in stream_topics),
     ]
     missing = [t for t in wanted if t.topic not in existing]
     for future in admin.create_topics(missing).values() if missing else ():

@@ -3,20 +3,27 @@
 Runs inside the `t-gnn-flink` image only (PyFlink 1.18 needs Python <= 3.10);
 submit it with `python scripts/submit_flink_job.py` from the host.
 
-    edges topic --key_by(edge_id)--> DecayFunction <--broadcast-- lambdas topic
-                                       |  main: edge refreshed at t_e
-                                       |  side: timer-driven w(e,t) re-evaluations -> weights topic
-                                       v
-                      key_by(src|protocol) --> BaselineFunction --> decayed topic
+    edges topic --key_by(src|protocol)--> DecayBaselineFunction <--broadcast-- lambdas topic
+                                            |  "d": decayed edge + deviation -> decayed topic
+                                            |  "w": timer-driven w(e,t) re-evaluations -> weights topic
 
-- `DecayFunction` (design.md 2.1/2.2) holds lambda_p per protocol in Flink
-  broadcast state, filled from a compacted Kafka topic, so a lambda_p change
-  reaches every task without a redeploy or a per-process YAML reload. It
-  keeps each live edge in keyed state and re-evaluates w(e,t) on event-time
-  timers -- every `--refresh-interval` seconds, plus exactly at the moment
-  w falls to `--expire-below`, after which the edge's state is dropped.
-- `BaselineFunction` (design.md 2.3) is the EWMA baseline as Flink keyed
-  state per (entity, protocol).
+`DecayBaselineFunction` is one operator (Backlog B.11), keyed by (entity,
+protocol). It used to be two: decay keyed by edge id (design.md 2.1's
+layout), then a re-key to (entity, protocol) for the baseline. Keyed by edge
+id, every edge was a new state key, so state never stayed hot, and the
+re-key cost a second Python<->JVM hop per edge. B.7's benchmark found the
+decay operator 100% busy at ~600 edges/s. Fusing them on the baseline's key
+keeps both kinds of state warm and drops the hop:
+
+- decay (design.md 2.1/2.2): lambda_p per protocol lives in Flink broadcast
+  state, filled from a compacted Kafka topic, so a lambda_p change reaches
+  every task without a redeploy or a per-process YAML reload. Each live edge
+  is re-evaluated on event-time timers -- every `--refresh-interval`
+  seconds, plus exactly at the moment w falls to `--expire-below`, after
+  which it's dropped. A key's live edges sit in refresh buckets by due time
+  (MapState), so a firing timer touches only the edges due then.
+- baseline (design.md 2.3): the EWMA baseline per (entity, protocol), as
+  keyed state.
 
 Event time is the edge's own `t_e`, so the decayed output is exactly what
 `DecayStreamProcessor.process(edge, t=edge.t_e)` computes in-process (what
@@ -25,8 +32,10 @@ rather than the wall clock: a replay of week-old edges decays them by their
 own clock, and timers stop when edges stop arriving.
 
 An edge whose protocol has no published lambda_p (and no default published
-either -- i.e. nothing has been published yet) is held in state and retried
-on a processing-time timer rather than decayed with a guessed constant.
+either -- i.e. nothing has been published yet) is held in its key's pending
+list and retried on a processing-time timer rather than decayed with a
+guessed constant. Later edges for that key queue behind it, so the baseline
+still sees them in arrival order.
 """
 
 from __future__ import annotations
@@ -35,6 +44,7 @@ import argparse
 import json
 import math
 import sys
+import time
 
 from pyflink.common import Configuration, Duration, Types, WatermarkStrategy
 from pyflink.common.serialization import SimpleStringSchema
@@ -48,7 +58,7 @@ from pyflink.datastream.connectors.kafka import (
     KafkaSink,
     KafkaSource,
 )
-from pyflink.datastream.functions import KeyedBroadcastProcessFunction, KeyedProcessFunction
+from pyflink.datastream.functions import KeyedBroadcastProcessFunction
 from pyflink.datastream.state import MapStateDescriptor, ValueStateDescriptor
 
 from t_gnn.baseline import DEFAULT_ALPHA
@@ -58,20 +68,22 @@ from t_gnn.flink.logic import (
     JOB_NAME,
     LAMBDAS_TOPIC,
     WEIGHTS_TOPIC,
-    baseline_key,
-    decayed_record,
+    bucket_add,
+    bucket_entries,
+    ingest_edge,
     next_refresh_time,
-    observe_from_state,
     parse_lambda_record,
-    refresh_at_ingest,
+    pending_add,
+    pending_edges,
+    raw_key,
+    reevaluate,
     resolve_lambda,
     to_millis,
-    weight_record,
 )
 from t_gnn.schema import Edge
 
 LAMBDAS_STATE = MapStateDescriptor("lambdas", Types.STRING(), Types.DOUBLE())
-# DecayFunction's one output stream carries both kinds of record, tagged by
+# The operator's one output stream carries both kinds of record, tagged by
 # their first character, and two chained filters split it. Not a side output:
 # in thread mode PyFlink 1.18 mishandles a side output emitted from on_timer
 # (it reaches the main output as a raw tuple and the String serializer throws
@@ -102,36 +114,48 @@ class _BroadcastLambdas:
         return self._state.get(key) if self._state.contains(key) else default
 
 
-class DecayFunction(KeyedBroadcastProcessFunction):
-    def __init__(self, refresh_interval: float, expire_below: float) -> None:
+class DecayBaselineFunction(KeyedBroadcastProcessFunction):
+    def __init__(self, refresh_interval: float, expire_below: float, alpha: float) -> None:
         self.refresh_interval = refresh_interval
         self.expire_below = expire_below
+        self.alpha = alpha
 
     def open(self, runtime_context) -> None:
-        # One JSON value per edge -- {"edge", "lambda_p"} while it's being
-        # re-evaluated, {"edge", "pending": true} while it waits for a
-        # lambda_p -- because every keyed-state write is the operator's main
-        # cost (each edge is a new key), and this keeps it to one write per
-        # edge, none at all with --refresh-interval 0 (Backlog B.7).
-        self.tracked = runtime_context.get_state(ValueStateDescriptor("tracked", Types.STRING()))
+        self.baseline = runtime_context.get_state(ValueStateDescriptor("baseline", Types.STRING()))
+        self.pending = runtime_context.get_state(ValueStateDescriptor("pending", Types.STRING()))
+        # due time (event-time ms) -> the key's edges to re-evaluate then
+        self.due = runtime_context.get_map_state(MapStateDescriptor("due", Types.LONG(), Types.STRING()))
 
     def _lambda(self, ctx, protocol: str):
         return resolve_lambda(_BroadcastLambdas(ctx.get_broadcast_state(LAMBDAS_STATE)), protocol)
 
+    def _schedule(self, edge: Edge, lambda_p: float, due_ms: int, ctx) -> None:
+        raw = self.due.get(due_ms) if self.due.contains(due_ms) else None
+        self.due.put(due_ms, bucket_add(raw, edge, lambda_p))
+        if raw is None:
+            ctx.timer_service().register_event_time_timer(due_ms)
+
     def _ingest(self, edge: Edge, lambda_p: float, ctx):
-        yield DECAYED_KIND + refresh_at_ingest(edge, lambda_p).to_json()
+        state, record = ingest_edge(edge, lambda_p, self.baseline.value(), alpha=self.alpha)
+        self.baseline.update(state)
+        yield DECAYED_KIND + record
         if self.refresh_interval > 0:
             next_t = next_refresh_time(edge, edge.t_e, lambda_p, self.refresh_interval, self.expire_below)
             if math.isfinite(next_t):
-                self.tracked.update(json.dumps({"edge": edge.to_dict(), "lambda_p": lambda_p}))
-                ctx.timer_service().register_event_time_timer(to_millis(next_t))
+                self._schedule(edge, lambda_p, to_millis(next_t), ctx)
 
     def process_element(self, value, ctx):
         edge = Edge.from_json(value)
-        lambda_p = self._lambda(ctx, edge.protocol)
+        waiting = self.pending.value()
+        lambda_p = None if waiting else self._lambda(ctx, edge.protocol)
         if lambda_p is None:
-            self.tracked.update(json.dumps({"edge": edge.to_dict(), "pending": True}))
-            ctx.timer_service().register_processing_time_timer(ctx.current_processing_time() + PENDING_RETRY_MS)
+            self.pending.update(pending_add(waiting, edge))
+            if not waiting:
+                # Wall-clock ms is what processing time is. Not
+                # ctx.current_processing_time(): in thread mode that call
+                # crash-looped the job on a freshly started second
+                # taskmanager (pemja: "error return without exception set").
+                ctx.timer_service().register_processing_time_timer(int(time.time() * 1000) + PENDING_RETRY_MS)
             return
         yield from self._ingest(edge, lambda_p, ctx)
 
@@ -140,53 +164,35 @@ class DecayFunction(KeyedBroadcastProcessFunction):
         ctx.get_broadcast_state(LAMBDAS_STATE).put(protocol, lambda_p)
 
     def on_timer(self, timestamp, ctx):
-        raw = self.tracked.value()
-        if raw is None:
-            return
-        tracked = json.loads(raw)
-        edge = Edge.from_dict(tracked["edge"])
-
         if ctx.time_domain() == TimeDomain.PROCESSING_TIME:
-            if not tracked.get("pending"):
+            waiting = pending_edges(self.pending.value())
+            if not waiting:
                 return
-            lambda_p = self._lambda(ctx, edge.protocol)
+            # one key = one protocol, so one lambda_p covers the whole list
+            lambda_p = self._lambda(ctx, waiting[0].protocol)
             if lambda_p is None:
                 ctx.timer_service().register_processing_time_timer(timestamp + PENDING_RETRY_MS)
                 return
-            self.tracked.clear()
-            yield from self._ingest(edge, lambda_p, ctx)
+            self.pending.clear()
+            for edge in waiting:
+                yield from self._ingest(edge, lambda_p, ctx)
             return
 
-        # Event-time refresh. The broadcast value wins, so a hot-reloaded
-        # lambda_p applies from the next re-evaluation on.
-        lambda_p = self._lambda(ctx, edge.protocol)
-        if lambda_p is None:
-            lambda_p = tracked["lambda_p"]
+        # Event-time refresh of every edge due now. The broadcast value wins,
+        # so a hot-reloaded lambda_p applies from the next re-evaluation on.
+        if not self.due.contains(timestamp):
+            return
+        entries = bucket_entries(self.due.get(timestamp))
+        self.due.remove(timestamp)
         t = timestamp / 1000.0
-        record, expired = weight_record(edge, t, lambda_p, self.expire_below)
-        yield WEIGHT_KIND + json.dumps(record)
-        if expired:
-            self.tracked.clear()
-            return
-        if lambda_p != tracked["lambda_p"]:
-            self.tracked.update(json.dumps({"edge": tracked["edge"], "lambda_p": lambda_p}))
-        next_t = next_refresh_time(edge, t, lambda_p, self.refresh_interval, self.expire_below)
-        if math.isfinite(next_t):
-            ctx.timer_service().register_event_time_timer(max(to_millis(next_t), timestamp + 1))
-
-
-class BaselineFunction(KeyedProcessFunction):
-    def __init__(self, alpha: float) -> None:
-        self.alpha = alpha
-
-    def open(self, runtime_context) -> None:
-        self.baseline_state = runtime_context.get_state(ValueStateDescriptor("baseline", Types.STRING()))
-
-    def process_element(self, value, ctx):
-        edge = Edge.from_json(value)
-        new_state, signal = observe_from_state(self.baseline_state.value(), edge, alpha=self.alpha)
-        self.baseline_state.update(new_state)
-        yield decayed_record(edge, signal)
+        for edge, tracked_lambda in entries:
+            lambda_p = self._lambda(ctx, edge.protocol)
+            if lambda_p is None:
+                lambda_p = tracked_lambda
+            record, next_t = reevaluate(edge, t, lambda_p, self.refresh_interval, self.expire_below)
+            yield WEIGHT_KIND + record
+            if next_t is not None:
+                self._schedule(edge, lambda_p, max(to_millis(next_t), timestamp + 1), ctx)
 
 
 def _source(bootstrap: str, topic: str, group_id: str, starting_offsets) -> KafkaSource:
@@ -244,10 +250,10 @@ def build(env: StreamExecutionEnvironment, args: argparse.Namespace) -> None:
     )
 
     tagged = (
-        edges.key_by(lambda value: Edge.from_json(value).edge_id, key_type=Types.STRING())
+        edges.key_by(raw_key, key_type=Types.STRING())
         .connect(lambdas.broadcast(LAMBDAS_STATE))
-        .process(DecayFunction(args.refresh_interval, args.expire_below), output_type=Types.STRING())
-        .name("decay")
+        .process(DecayBaselineFunction(args.refresh_interval, args.expire_below, args.alpha), output_type=Types.STRING())
+        .name("decay-baseline")
     )
 
     def of_kind(kind: str):
@@ -257,13 +263,7 @@ def build(env: StreamExecutionEnvironment, args: argparse.Namespace) -> None:
         )
 
     of_kind(WEIGHT_KIND).sink_to(_sink(args.bootstrap_servers, args.weights_topic)).name("weights-sink")
-    (
-        of_kind(DECAYED_KIND).key_by(lambda value: baseline_key(Edge.from_json(value)), key_type=Types.STRING())
-        .process(BaselineFunction(args.alpha), output_type=Types.STRING())
-        .name("baseline")
-        .sink_to(_sink(args.bootstrap_servers, args.decayed_topic))
-        .name("decayed-sink")
-    )
+    of_kind(DECAYED_KIND).sink_to(_sink(args.bootstrap_servers, args.decayed_topic)).name("decayed-sink")
 
 
 def parse_args(argv=None) -> argparse.Namespace:

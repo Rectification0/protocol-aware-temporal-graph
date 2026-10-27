@@ -6,7 +6,8 @@ testable without PyFlink (which can't be installed on the host's Python 3.12).
 
 Topics and record shapes (all values are JSON strings):
 
-- `EDGES_TOPIC` (in): `Edge.to_json()`, keyed by `edge.src`.
+- `EDGES_TOPIC` (in): `Edge.to_json()`, keyed by `edge.src`. The job re-keys
+  by `baseline_key()` (entity, protocol) -- Backlog B.11.
 - `LAMBDAS_TOPIC` (in, compacted, broadcast to every task): one record per
   protocol, keyed by protocol -- `{"protocol", "lambda_p", "published_at"}`.
   `DEFAULT_PROTOCOL_KEY` carries `default_lambda_p`, the fallback for a
@@ -121,3 +122,62 @@ def decayed_record(edge: Edge, signal: DeviationSignal) -> str:
 def parse_decayed_record(value: str) -> tuple[Edge, DeviationSignal]:
     record = json.loads(value)
     return Edge.from_dict(record["edge"]), DeviationSignal(**record["deviation"])
+
+
+# --- Backlog B.11: the fused decay+baseline operator, keyed by (entity, protocol) ---
+#
+# The job used to key the decay step by edge id, so every edge was a new key
+# and keyed state never stayed hot, then re-key by `baseline_key()` for the
+# baseline -- a second Python<->JVM hop per edge. Now one operator is keyed
+# by `baseline_key()` and does both. Its keyed state per (entity, protocol):
+# the EWMA baseline, the edges waiting for a lambda_p (in arrival order, so
+# the baseline still sees them in order), and the live edges' refresh
+# timers, bucketed by due time so a firing timer touches only the edges due
+# then.
+
+
+def raw_key(value: str) -> str:
+    """`baseline_key()` straight from an edge's JSON, without building an Edge."""
+    record = json.loads(value)
+    return f"{record['src']}|{record['protocol']}"
+
+
+def ingest_edge(edge: Edge, lambda_p: float, baseline_state: Optional[str], alpha: float = DEFAULT_ALPHA) -> tuple[str, str]:
+    """Decay at ingest, then the baseline step: (new baseline state, decayed
+    record). Exactly `DecayStreamProcessor.process(edge, t=edge.t_e)`."""
+    refreshed = refresh_at_ingest(edge, lambda_p)
+    new_state, signal = observe_from_state(baseline_state, refreshed, alpha=alpha)
+    return new_state, decayed_record(refreshed, signal)
+
+
+def reevaluate(edge: Edge, t: float, lambda_p: float, refresh_interval: float,
+               expire_below: float) -> tuple[str, Optional[float]]:
+    """A timer's re-evaluation: (weight record JSON, next refresh time, or
+    None once the edge has expired or will never need another)."""
+    record, expired = weight_record(edge, t, lambda_p, expire_below)
+    if expired:
+        return json.dumps(record), None
+    next_t = next_refresh_time(edge, t, lambda_p, refresh_interval, expire_below)
+    return json.dumps(record), next_t if math.isfinite(next_t) else None
+
+
+def bucket_add(raw: Optional[str], edge: Edge, lambda_p: float) -> str:
+    """Add an edge to the refresh bucket for one due time (JSON list)."""
+    entries = json.loads(raw) if raw else []
+    entries.append({"edge": edge.to_dict(), "lambda_p": lambda_p})
+    return json.dumps(entries)
+
+
+def bucket_entries(raw: str) -> list[tuple[Edge, float]]:
+    return [(Edge.from_dict(e["edge"]), e["lambda_p"]) for e in json.loads(raw)]
+
+
+def pending_add(raw: Optional[str], edge: Edge) -> str:
+    """Append an edge to the key's waiting-for-lambda_p list (JSON list)."""
+    entries = json.loads(raw) if raw else []
+    entries.append(edge.to_dict())
+    return json.dumps(entries)
+
+
+def pending_edges(raw: Optional[str]) -> list[Edge]:
+    return [Edge.from_dict(e) for e in json.loads(raw)] if raw else []

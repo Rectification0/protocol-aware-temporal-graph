@@ -47,6 +47,12 @@ services:
         jobmanager.rpc.address: jobmanager
         state.checkpoint-storage: filesystem
         state.checkpoints.dir: file:///opt/flink/checkpoints
+        # Backlog B.11: spread a job's subtasks over taskmanagers instead of
+        # filling one first. In PyFlink thread mode each taskmanager has one
+        # Python interpreter, so two subtasks in one process share its GIL
+        # and run slower than one. Scale out with
+        # `docker compose up -d --scale taskmanager=N` and --parallelism N.
+        cluster.evenly-spread-out-slots: true
     volumes:
       - flink-jobs:/opt/flink/usrlib
       # Checkpoints on disk, shared by both containers. Flink's default keeps

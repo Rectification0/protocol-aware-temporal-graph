@@ -104,7 +104,7 @@ prunes harder while the job can't keep up.
 ```bash
 pip install -e ".[flink]"              # confluent-kafka, the host's Kafka client
 docker compose up -d                   # first run builds the t-gnn-flink image (a few minutes)
-python scripts/submit_flink_job.py     # idempotent; --replace after changing the job's code
+python scripts/submit_flink_job.py     # idempotent; after changing the job's code: docker compose restart taskmanager, then --replace
 python scripts/run_pipeline.py --decay-backend flink
 ```
 

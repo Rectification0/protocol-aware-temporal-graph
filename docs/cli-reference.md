@@ -646,7 +646,7 @@ RUNNING.
 
 ```bash
 python scripts/submit_flink_job.py
-python scripts/submit_flink_job.py --replace                          # after changing the job's code
+python scripts/submit_flink_job.py --replace                          # after changing the job's code (restart the taskmanager first)
 python scripts/submit_flink_job.py --replace -- --refresh-interval 600   # job flags after --
 ```
 
@@ -655,6 +655,7 @@ python scripts/submit_flink_job.py --replace -- --refresh-interval 600   # job f
 | `--flink-url` | `http://localhost:8081` | Flink REST API |
 | `--bootstrap-servers` | `localhost:9092` | Kafka, as the host sees it |
 | `--replace` | off | Cancel a running copy first, then submit |
+| `--edge-partitions` | `1` | Partitions for the edges topic, if this run creates it. Match the job's `--parallelism` (Backlog B.11). An existing topic keeps its partitions |
 | `--wait` | `60` | Seconds to wait for RUNNING before failing |
 
 The job's own flags (refresh interval, expiry floor, watermark settings)
@@ -673,7 +674,7 @@ NFR2 (throughput) on the real code paths and writes a JSON report.
 ```bash
 python -m t_gnn.bench inference [--sizes 100,1000,10000,50000,100000] [--repeats 20] [--max-edges 50000]
 python -m t_gnn.bench ingest [--edges 100000] [--prune-every 1000]
-python -m t_gnn.bench flink [--rates 200,400,600,800] [--duration 30] [--parallelism 1]
+python -m t_gnn.bench flink [--rates 200,400,600,800] [--duration 30] [--parallelism 1] [--edge-partitions N]
 python -m t_gnn.bench all --output bench-report.json
 ```
 

@@ -10,13 +10,20 @@ from t_gnn.decay import DecayEngine
 from t_gnn.flink.logic import (
     DEFAULT_PROTOCOL_KEY,
     baseline_key,
+    bucket_add,
+    bucket_entries,
     decayed_record,
     expiry_time,
+    ingest_edge,
     lambda_records,
     next_refresh_time,
     observe_from_state,
     parse_decayed_record,
     parse_lambda_record,
+    pending_add,
+    pending_edges,
+    raw_key,
+    reevaluate,
     refresh_at_ingest,
     resolve_lambda,
     to_millis,
@@ -104,3 +111,49 @@ def test_decayed_record_round_trips_what_the_in_process_pipeline_produces():
 
 def test_baseline_key_is_entity_and_protocol():
     assert baseline_key(_edge(src="User:bob", protocol="SMB")) == "User:bob|SMB"
+
+
+# --- Backlog B.11: the fused decay+baseline operator keyed by (entity, protocol) ---
+
+
+def test_ingest_edge_matches_the_in_process_pipeline_step_for_step():
+    registry = ProtocolDecayRegistry()
+    processor = DecayStreamProcessor()
+    state = None
+    for i, w_0 in enumerate([1.0, 0.8, 0.9, 0.3, 1.0, 0.95]):
+        edge = _edge(t_e=1000.0 + 60 * i, w_0=w_0)
+        state, record = ingest_edge(edge, registry.lambda_for("RDP"), state)
+        expected = processor.process(edge, t=edge.t_e)
+        assert parse_decayed_record(record) == (expected.edge, expected.deviation)
+
+
+def test_raw_key_matches_baseline_key_without_building_an_edge():
+    edge = _edge(src="User:carol", protocol="Kerberos")
+    assert raw_key(edge.to_json()) == baseline_key(edge) == "User:carol|Kerberos"
+
+
+def test_bucket_keeps_every_edge_due_at_one_moment_in_order():
+    first, second = _edge(t_e=1000.0), _edge(t_e=1000.5, w_0=0.7)
+    raw = bucket_add(bucket_add(None, first, 0.001), second, 0.002)
+    assert bucket_entries(raw) == [(first, 0.001), (second, 0.002)]
+
+
+def test_pending_edges_keep_arrival_order():
+    edges = [_edge(t_e=1000.0 + i) for i in range(3)]
+    raw = None
+    for edge in edges:
+        raw = pending_add(raw, edge)
+    assert pending_edges(raw) == edges
+    assert pending_edges(None) == []
+
+
+def test_reevaluate_schedules_the_next_refresh_until_expiry():
+    edge, lambda_p = _edge(t_e=1000.0), 0.001
+    record, next_t = reevaluate(edge, 1600.0, lambda_p, refresh_interval=600.0, expire_below=0.05)
+    expected, expired = weight_record(edge, 1600.0, lambda_p, 0.05)
+    assert json.loads(record) == expected and not expired
+    assert next_t == next_refresh_time(edge, 1600.0, lambda_p, 600.0, 0.05)
+
+    at_expiry = expiry_time(edge, lambda_p, 0.05)
+    record, next_t = reevaluate(edge, at_expiry, lambda_p, refresh_interval=600.0, expire_below=0.05)
+    assert json.loads(record)["expired"] and next_t is None
