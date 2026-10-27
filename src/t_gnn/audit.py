@@ -84,6 +84,7 @@ class AuditLogger:
             "protocol": event.edge.protocol,
             "w_at_prune": event.w_at_prune,
             "pruned_at": event.pruned_at,
+            "reason": event.reason,  # B.12: "decay" or "cap"
             "logged_at": time.time(),
         })
 

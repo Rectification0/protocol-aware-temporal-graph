@@ -611,7 +611,7 @@ python scripts/run_pipeline.py --source replay --staged-dir data/lanl/simulated/
 | `--z-threshold` | `3.0` | \|z-score\| to print as an anomaly |
 | `--epsilon-min` | `0.05` | `EpsilonController` floor |
 | `--epsilon-max` | `0.4` | `EpsilonController` ceiling |
-| `--max-edges` | `5000` | Graph-size ceiling feeding `EpsilonController`'s size pressure |
+| `--max-edges` | `5000` | Graph-size ceiling: feeds `EpsilonController`'s size pressure, and each pruning pass prunes the lowest-weight edges until the graph fits (Backlog B.12) |
 | `--fuzzy` | off | Enable `MotifEngine`'s fuzzy/probabilistic matching mode |
 | `--min-confidence` | `0.5` | Only used with `--fuzzy` |
 | `--shards` | `1` | Use N shards for the graph store + motif cache (`N=1` is the plain path) |

@@ -183,3 +183,100 @@ def test_stop_is_idempotent_and_joins_thread():
     watcher.start()
     watcher.stop(timeout=2.0)
     watcher.stop(timeout=2.0)  # calling stop again should not raise
+
+
+# --- Backlog B.12: max_edges as a hard ceiling -----------------------------------
+
+
+def _capped_watcher(store, max_edges, event_bus=None, cold_storage=None, epsilon=0.01):
+    return PruningWatcher(
+        store=store,
+        decay_engine=DecayEngine(),
+        epsilon_controller=EpsilonController(epsilon_min=epsilon, epsilon_max=epsilon, max_edges=max_edges),
+        cold_storage=cold_storage or InMemoryColdStorageWriter(),
+        event_bus=event_bus,
+        memory_probe=lambda: None,
+    )
+
+
+def _fresh_edges(n):
+    """Edges all well above epsilon at t=1.0, with distinct weights w_0 = 0.5..~1."""
+    return [_edge(src=f"User:u{i}", protocol="SMB", t_e=0.0, w_0=0.5 + i / (2 * n)) for i in range(n)]
+
+
+def test_cap_prunes_lowest_weight_survivors_down_to_max_edges():
+    store = ActiveGraphStore()
+    edges = _fresh_edges(20)
+    for edge in edges:
+        store.upsert(edge)
+
+    stats = _capped_watcher(store, max_edges=15).run_once(t=1.0)
+
+    assert len(store) == 15
+    assert stats.pruned == stats.capped == 5
+    assert {e.edge_id for e in store.edges()} == {e.edge_id for e in edges[5:]}  # the five lightest went
+
+
+def test_cap_counts_epsilon_prunes_first():
+    store = ActiveGraphStore()
+    stale = [_edge(src=f"User:old{i}", protocol="RDP", t_e=0.0) for i in range(3)]  # RDP: long decayed by t
+    fresh = [_edge(src=f"User:u{i}", protocol="SMB", t_e=36_000.0, w_0=0.5 + i / 20) for i in range(10)]
+    for edge in stale + fresh:
+        store.upsert(edge)
+
+    stats = _capped_watcher(store, max_edges=8, epsilon=0.3).run_once(t=36_001.0)
+
+    assert stats.pruned == 5 and stats.capped == 2  # 3 by epsilon, then 2 more to reach 8
+    assert len(store) == 8
+
+
+def test_cap_writes_cold_storage_and_publishes_events_tagged_cap():
+    store = ActiveGraphStore()
+    for edge in _fresh_edges(6):
+        store.upsert(edge)
+    bus = PruneEventBus()
+    received = []
+    bus.subscribe(received.append)
+    cold_storage = InMemoryColdStorageWriter()
+
+    _capped_watcher(store, max_edges=4, event_bus=bus, cold_storage=cold_storage).run_once(t=1.0)
+
+    assert [e.reason for e in received] == ["cap", "cap"]
+    assert {e.edge.edge_id for e in received} == {written.edge_id for written, _, _ in cold_storage.written}
+
+
+def test_cap_failed_write_leaves_the_edge_and_the_graph_over_the_cap():
+    class FailingColdStorage:
+        def write(self, edge, w_at_prune, pruned_at):
+            raise RuntimeError("neo4j unreachable")
+
+    store = ActiveGraphStore()
+    for edge in _fresh_edges(5):
+        store.upsert(edge)
+
+    stats = _capped_watcher(store, max_edges=3, cold_storage=FailingColdStorage()).run_once(t=1.0)
+
+    assert stats.write_failures == 2 and stats.capped == 0
+    assert len(store) == 5  # nothing removed without its cold-storage copy (FR2.4)
+
+
+def test_no_cap_when_max_edges_unset_or_not_exceeded():
+    store = ActiveGraphStore()
+    for edge in _fresh_edges(5):
+        store.upsert(edge)
+
+    assert _capped_watcher(store, max_edges=None).run_once(t=1.0).capped == 0
+    assert _capped_watcher(store, max_edges=5).run_once(t=1.0).capped == 0
+    assert len(store) == 5
+
+
+def test_epsilon_prunes_are_tagged_decay():
+    store = ActiveGraphStore()
+    store.upsert(_edge(protocol="RDP", t_e=0.0))
+    bus = PruneEventBus()
+    received = []
+    bus.subscribe(received.append)
+
+    _watcher(store, epsilon_min=0.9, epsilon_max=0.9, event_bus=bus).run_once(t=3600.0 * 10)
+
+    assert [e.reason for e in received] == ["decay"]

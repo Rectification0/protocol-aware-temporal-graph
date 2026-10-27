@@ -72,13 +72,27 @@ standalone config file for this; it's Python constructor arguments (tasks.md
 | `epsilon_max` | yes | ε at 100% memory or size pressure (aggressive pruning); must be `>= epsilon_min` |
 | `low_watermark` | no (default 70.0) | System memory % below which memory pressure is 0 |
 | `high_watermark` | no (default 90.0) | System memory % at/above which memory pressure is 1.0; must be `> low_watermark` |
-| `max_edges` | no (default `None`, i.e. no size-pressure signal) | Active Graph Store edge-count ceiling; size pressure = `min(1, edge_count / max_edges)` |
+| `max_edges` | no (default `None`, i.e. no size-pressure signal and no cap) | Active Graph Store edge-count ceiling. It feeds size pressure (`min(1, edge_count / max_edges)`), and since Backlog B.12 it's also a hard cap: see below |
 | `backpressure_low` | no (default 0.1) | Flink backpressure ratio at or below which backpressure adds no pressure (Flink's own "ok" band) |
 | `backpressure_high` | no (default 0.5) | Ratio at or above which backpressure is full pressure (Flink calls > 0.5 "high"); must be `> backpressure_low` |
 
 `compute_epsilon()` takes the *max* of the memory-pressure, size-pressure and
 backpressure signals, then linearly interpolates between
 `epsilon_min`/`epsilon_max`.
+
+**Hard cap (Backlog B.12).** Size pressure alone can't hold the graph at
+`max_edges`: at full pressure ε stops at `epsilon_max`, and fresh edges
+weighted above it all survive (B.7's benchmark ended at 53.7k live edges
+against 50k). So after each ε pass, if the store is still above
+`max_edges`, `PruningWatcher` prunes the lowest-weight survivors until it
+fits. They go through the same path as ε prunes: cold storage first, then
+removal, then a prune event, with `PrunedEdgeEvent.reason = "cap"` (and
+`"reason": "cap"` in the audit log) instead of `"decay"`.
+`PruningStats.capped` counts them.
+- A failed cold-storage write leaves its edge in place, so the graph stays
+  above the cap until the next pass retries it. FR2.4 wins over NFR3.
+- Edges that arrive during a pass count towards the overflow but aren't
+  candidates until the next pass.
 
 **Backpressure (Backlog B.2)** is design.md §5's mitigation for "Flink
 backpressure during log spikes": prune harder while ingestion can't keep up.
@@ -103,9 +117,10 @@ enough to back up the source.
   no Flink job, so it has no backpressure signal.
 Tuning guidance:
 - Set `max_edges` to whatever RAM budget you've sized the Active Graph
-  Store for (design.md §6's open sizing question) — this is the only hard
-  ceiling NFR3 actually guarantees, independent of memory-pressure
-  accuracy.
+  Store for (design.md §6's open sizing question). Since B.12 it's a real
+  ceiling at the end of every pruning pass, independent of memory-pressure
+  accuracy. Between passes the graph can overshoot by however many edges
+  arrive in one `poll_interval`.
 - Widen the `epsilon_min`–`epsilon_max` range for more aggressive
   responsiveness to pressure; narrow it if pruning is too "twitchy" under
   normal load swings.

@@ -183,10 +183,17 @@ in-memory writer), and the scheduled inference pass competing for the same
 process.
 
 **NFR3 observation.** The run ended with 53,702 live edges against
-`max_edges=50,000`. `EpsilonController` treats `max_edges` as a pressure
+`max_edges=50,000`. `EpsilonController` treated `max_edges` as a pressure
 input, not a hard cap. At full pressure ε rises only to `epsilon_max` (0.4
-here), and freshly ingested edges weighted above it survive. NFR3 asks for
-a ceiling "enforced via FR2", so this is a gap worth its own follow-up.
+here), and freshly ingested edges weighted above it survived. NFR3 asks for
+a ceiling "enforced via FR2". **Fixed by Backlog B.12 (2026-10-27):** each
+pruning pass now prunes the lowest-weight survivors down to `max_edges`, and
+the same run ends at exactly 50,000. Throughput was unchanged within noise
+(~22,700 edges/s against ~24,100 for B.10 alone, runs vary by ±1,500/s).
+The first version cost more than half the throughput, because collecting a
+tuple per surviving edge on every pass kept triggering Python's garbage
+collector over the whole graph. It now collects survivors only when the
+pass's snapshot is over the cap, as plain float and edge lists.
 
 ### Real Flink job (`--decay-backend flink`)
 

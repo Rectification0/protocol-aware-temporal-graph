@@ -14,6 +14,14 @@ design.md 2.5's three steps map onto `PruningWatcher.run_once()`:
   3. Publish a "pruned" event (2.5) so downstream consumers (the Phase 3
      Motif Engine) can reset dependent partial-motif state (FR3.3).
 
+Backlog B.12 adds a hard ceiling after those steps: if the graph is still
+above `EpsilonController.max_edges` once the epsilon pass is done, the
+lowest-weight survivors are pruned until it fits -- through the same
+cold-storage-first path and prune events, tagged `reason="cap"`. Without
+it, `max_edges` was only a pressure input: at full pressure epsilon stops at
+`epsilon_max`, and fresh edges weighted above that all survived (B.7's
+benchmark ended at 53.7k live edges against `max_edges=50,000`).
+
 Non-blocking reads (2.6/FR2.5): the cold-storage write happens *without*
 holding the store's lock (it operates on an already-read-out Edge, not the
 store itself), so `ActiveGraphStore`'s lock is only held for the brief
@@ -24,6 +32,7 @@ only for a single dict pop.
 
 from __future__ import annotations
 
+import heapq
 import logging
 import threading
 import time
@@ -136,6 +145,7 @@ class PrunedEdgeEvent:
     edge: Edge
     w_at_prune: float
     pruned_at: float
+    reason: str = "decay"  # "decay" (w < epsilon) or "cap" (B.12's max_edges ceiling)
 
 
 class PruneEventBus:
@@ -166,6 +176,7 @@ class PruningStats:
     epsilon: float
     write_failures: int = 0
     backpressure: Optional[float] = None  # the probe's reading this pass, if one is wired in (B.2)
+    capped: int = 0  # B.12: how many of `pruned` the max_edges ceiling removed, not epsilon
 
 
 class PruningWatcher:
@@ -200,28 +211,63 @@ class PruningWatcher:
         backpressure = self.backpressure_probe() if self.backpressure_probe is not None else None
         epsilon = self.epsilon_controller.compute_epsilon(len(edges), self.memory_probe(), backpressure)
 
+        max_edges = self.epsilon_controller.max_edges
+        # B.12: only a snapshot above the cap can leave survivors to cap, so
+        # only then are they collected. Weights go in a plain float list
+        # (not per-edge tuples): allocating a tuple per edge every pass kept
+        # triggering the garbage collector over the whole graph's Edges.
+        collect = bool(max_edges) and len(edges) > max_edges
+        survivor_edges: list[Edge] = []
+        survivor_weights: list[float] = []
+
         pruned = 0
         write_failures = 0
         for edge in edges:
             w = self.decay_engine.weight_at(edge, t)
             if w >= epsilon:
+                if collect:
+                    survivor_edges.append(edge)
+                    survivor_weights.append(w)
                 continue
+            outcome = self._prune(edge, w, t, reason="decay")
+            pruned += outcome is True
+            write_failures += outcome is None
 
-            try:
-                self.cold_storage.write(edge, w, t)
-            except Exception:
-                write_failures += 1
-                logger.error("cold-storage write failed; leaving edge %s active for retry", edge.edge_id, exc_info=True)
-                continue
-
-            removed = self.store.remove(edge.edge_id)
-            if removed is not None:
-                pruned += 1
-                self.event_bus.publish(PrunedEdgeEvent(edge=removed, w_at_prune=w, pruned_at=t))
+        capped = 0
+        if collect:
+            # The hard ceiling. Measured against the live store, so an edge
+            # upserted since the snapshot counts towards the overflow, but
+            # only snapshot edges are candidates: newer ones wait for the
+            # next pass. A failed write leaves the graph above the cap until
+            # that pass retries it.
+            excess = len(self.store) - max_edges
+            if excess > 0:
+                lightest = heapq.nsmallest(excess, range(len(survivor_weights)), key=survivor_weights.__getitem__)
+                for i in lightest:
+                    outcome = self._prune(survivor_edges[i], survivor_weights[i], t, reason="cap")
+                    capped += outcome is True
+                    write_failures += outcome is None
+                pruned += capped
 
         return PruningStats(
-            scanned=len(edges), pruned=pruned, epsilon=epsilon, write_failures=write_failures, backpressure=backpressure
+            scanned=len(edges), pruned=pruned, epsilon=epsilon, write_failures=write_failures,
+            backpressure=backpressure, capped=capped,
         )
+
+    def _prune(self, edge: Edge, w: float, t: float, reason: str) -> Optional[bool]:
+        """Cold storage first, then removal and the prune event (FR2.4/FR3.3).
+        True if pruned, False if the edge was already gone, None if the
+        cold-storage write failed (the edge stays active for a retry)."""
+        try:
+            self.cold_storage.write(edge, w, t)
+        except Exception:
+            logger.error("cold-storage write failed; leaving edge %s active for retry", edge.edge_id, exc_info=True)
+            return None
+        removed = self.store.remove(edge.edge_id)
+        if removed is None:
+            return False
+        self.event_bus.publish(PrunedEdgeEvent(edge=removed, w_at_prune=w, pruned_at=t, reason=reason))
+        return True
 
     def start(self) -> None:
         """Run the scan-and-prune loop on a background daemon thread (2.2/2.6)."""

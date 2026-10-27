@@ -29,7 +29,14 @@ def test_log_prune_writes_full_record():
     assert record["protocol"] == "RDP"
     assert record["w_at_prune"] == 0.002
     assert record["pruned_at"] == 100.0
+    assert record["reason"] == "decay"
     assert "logged_at" in record
+
+
+def test_log_prune_records_a_cap_prune_reason():
+    sink = InMemoryAuditSink()
+    AuditLogger(sink).log_prune(PrunedEdgeEvent(edge=_edge(), w_at_prune=0.8, pruned_at=100.0, reason="cap"))
+    assert sink.records[0]["reason"] == "cap"
 
 
 def test_log_motif_reset_writes_full_record():
