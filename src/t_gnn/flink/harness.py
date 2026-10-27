@@ -13,6 +13,7 @@ Needs the compose stack (`docker compose up -d`) and the [flink] extra.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 import urllib.request
@@ -26,7 +27,9 @@ from t_gnn.flink.kafka_io import DEFAULT_BOOTSTRAP, ensure_topics
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 JOB_PATH_IN_IMAGE = "/opt/t_gnn/src/t_gnn/flink/decay_job.py"
-DEFAULT_FLINK_URL = "http://localhost:8081"
+# As the host sees it; FLINK_REST_URL overrides it (e.g. http://jobmanager:8081
+# when the tests run in a container on the compose network).
+DEFAULT_FLINK_URL = os.environ.get("FLINK_REST_URL", "http://localhost:8081")
 
 
 def flink_jobs(flink_url: str = DEFAULT_FLINK_URL) -> dict[str, dict]:

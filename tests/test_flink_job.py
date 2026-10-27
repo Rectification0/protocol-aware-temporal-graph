@@ -16,8 +16,8 @@ import pytest
 
 confluent_kafka = pytest.importorskip("confluent_kafka", reason="needs the [flink] extra: pip install -e '.[flink]'")
 
-from t_gnn.flink.harness import IsolatedJob, stack_up  # noqa: E402
-from t_gnn.flink.kafka_io import drain, make_producer, produce_edge, publish_lambdas, tail_consumer  # noqa: E402
+from t_gnn.flink.harness import DEFAULT_FLINK_URL, IsolatedJob, stack_up  # noqa: E402
+from t_gnn.flink.kafka_io import DEFAULT_BOOTSTRAP, drain, make_producer, produce_edge, publish_lambdas, tail_consumer  # noqa: E402
 from t_gnn.flink.logic import expiry_time, parse_decayed_record  # noqa: E402
 from t_gnn.flink.backpressure import FlinkBackpressureProbe  # noqa: E402
 from t_gnn.cold_storage import InMemoryColdStorageWriter  # noqa: E402
@@ -28,8 +28,9 @@ from t_gnn.protocol_registry import ProtocolDecayRegistry  # noqa: E402
 from t_gnn.schema import Edge  # noqa: E402
 from t_gnn.streaming import DecayStreamProcessor  # noqa: E402
 
-BOOTSTRAP = "localhost:9092"
-FLINK_URL = "http://localhost:8081"
+# localhost by default; KAFKA_BOOTSTRAP_SERVERS / FLINK_REST_URL override them.
+BOOTSTRAP = DEFAULT_BOOTSTRAP
+FLINK_URL = DEFAULT_FLINK_URL
 T0 = 1_000_000.0  # the test's own event-time origin; its topics see no other clock
 REFRESH_INTERVAL = 60.0
 EXPIRE_BELOW = 0.05
