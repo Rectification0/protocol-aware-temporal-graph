@@ -179,3 +179,37 @@ def test_motif_engine_completes_a_real_motif_using_sharded_state_store():
 
     assert len(completions) == 1
     assert completions[0].chain_key == "Machine:C2042"
+
+
+def test_sharded_store_in_subgraph_matches_single_store():
+    edges = [_edge(f"User:u{i % 5}", f"Machine:m{i % 4}", t_e=float(i)) for i in range(40)]
+    edges += [_edge(f"Machine:m{i}", "Machine:dc", t_e=100.0 + i) for i in range(4)]
+    single, sharded = ActiveGraphStore(), ShardedActiveGraphStore(num_shards=3)
+    for edge in edges:
+        single.upsert(edge)
+        sharded.upsert(edge)
+
+    _, single_ids, single_nodes = single.in_subgraph(["Machine:dc"], num_hops=2)
+    sharded_index, sharded_ids, sharded_nodes = sharded.in_subgraph(["Machine:dc"], num_hops=2)
+
+    assert set(sharded_ids) == set(single_ids) and len(single_ids) == 44
+    assert set(sharded_nodes) == set(single_nodes)
+    names = list(sharded_nodes)
+    for col, edge_id in enumerate(sharded_ids):
+        edge = sharded.get(edge_id)
+        assert (names[sharded_index[0, col]], names[sharded_index[1, col]]) == (edge.src, edge.dst)
+
+
+def test_sharded_to_pyg_edge_index_decodes_to_real_endpoints():
+    edges = [_edge(f"User:u{i % 7}", f"Machine:m{i % 3}", t_e=float(i)) for i in range(30)]
+    sharded = ShardedActiveGraphStore(num_shards=4)
+    for edge in edges:
+        sharded.upsert(edge)
+
+    edge_index, edge_ids, node_index = sharded.to_pyg_edge_index()
+
+    names = list(node_index)
+    assert list(node_index.values()) == list(range(len(names)))
+    for col, edge_id in enumerate(edge_ids):
+        edge = sharded.get(edge_id)
+        assert (names[edge_index[0, col]], names[edge_index[1, col]]) == (edge.src, edge.dst)

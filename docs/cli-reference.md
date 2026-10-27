@@ -671,7 +671,7 @@ NFR2 (throughput) on the real code paths and writes a JSON report.
 `docs/benchmarks.md` has the measured results and how to read them.
 
 ```bash
-python -m t_gnn.bench inference [--sizes 100,1000,10000,100000] [--repeats 20]
+python -m t_gnn.bench inference [--sizes 100,1000,10000,50000,100000] [--repeats 20] [--max-edges 50000]
 python -m t_gnn.bench ingest [--edges 100000] [--prune-every 1000]
 python -m t_gnn.bench flink [--rates 200,400,600,800] [--duration 30] [--parallelism 1]
 python -m t_gnn.bench all --output bench-report.json
@@ -679,7 +679,7 @@ python -m t_gnn.bench all --output bench-report.json
 
 | Command | Measures |
 |---|---|
-| `inference` | `TGNNInferenceEngine.run_once()` and the motif fast path at each graph size, plus the `edge_index` materialization and forward pass separately. p50/p99/max against the 1 ms target |
+| `inference` | At each graph size: the per-entity score lookup (`latest_score()`) against NFR1's 1 ms target, and `TGNNInferenceEngine.run_once()` and the motif fast path against their own budgets (`PASS_BUDGETS_MS`, Backlog B.10). The scheduled pass gets ≤ 50 ms p99, checked only up to `--max-edges` (default 50,000). The fast path gets ≤ 5 ms p99 at any size, on ordinary traffic and on a hub-heavy graph. Also the fast path's subgraph size, and the `edge_index` snapshot and forward pass separately. p50/p99/max |
 | `ingest` | Edges/s through the in-process per-edge pipeline, with pruning, extrapolated to events/day against 1 B/day |
 | `flink` | Offers each rate to a throwaway copy of the Flink job for `--duration` seconds and tracks the backlog. Reports whether it stayed bounded and the highest rate that did. Needs `docker compose up -d` and the `[flink]` extra |
 

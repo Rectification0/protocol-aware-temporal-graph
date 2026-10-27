@@ -222,3 +222,82 @@ def test_stop_is_idempotent_and_joins_thread():
     engine.start()
     engine.stop(timeout=2.0)
     engine.stop(timeout=2.0)  # calling stop again should not raise
+
+
+# --- Backlog B.10: k-hop fast path and the score lookup ------------------------------
+
+
+def _churned_store(n_edges=1500, seed=0):
+    """An enterprise-shaped graph that has also been pruned, so node slots
+    have been freed and reused. Machine->machine hops (lateral movement)
+    give targets a real second hop upstream, which user->machine traffic
+    alone never does."""
+    import random
+
+    from t_gnn.bench import synthetic_edges
+
+    rng = random.Random(seed)
+    edges = synthetic_edges(n_edges, seed=seed)
+    edges += [
+        _edge(f"Machine:m{rng.randrange(30)}", f"Machine:m{rng.randrange(30)}", protocol="SMB", t_e=1e6 + i)
+        for i in range(n_edges // 5)
+    ]
+    store = ActiveGraphStore()
+    for edge in edges:
+        store.upsert(edge)
+    for edge in rng.sample(edges, n_edges // 3):
+        store.remove(edge.edge_id)
+    return store
+
+
+def test_subgraph_scores_match_a_full_graph_pass():
+    store = _churned_store()
+    model = DynamicTGNN()
+    deviation = {"User:u3": 4.0, "Machine:m1": -2.5}
+    full = model.score_entities(store, deviation)
+    targets = ["User:u3", "Machine:m1", "Machine:m7", "Machine:ghost"]
+
+    targeted = model.score_entities(store, deviation, entity_ids=targets)
+
+    assert set(targeted) == {t for t in targets if t in full}
+    for node_id, score in targeted.items():
+        assert abs(score - full[node_id]) < 1e-5
+
+
+def test_fast_path_runs_on_a_subgraph_not_the_whole_graph():
+    store = _churned_store()
+    model = DynamicTGNN()
+    calls = []
+    real_forward = model.forward
+
+    def spy(edge_index, x):
+        calls.append(edge_index.shape[1])
+        return real_forward(edge_index, x)
+
+    model.forward = spy
+    model.score_entities(store, {}, entity_ids=["User:u3"])
+
+    assert calls and calls[0] < len(store)
+
+
+def test_latest_score_tracks_scheduled_and_fast_path_results():
+    store = ActiveGraphStore()
+    a_b, b_c = _edge("Machine:A", "Machine:B"), _edge("Machine:B", "Machine:C")
+    store.upsert(a_b)
+    store.upsert(b_c)
+    engine = TGNNInferenceEngine(store=store)
+    assert engine.latest_score("Machine:B") is None
+
+    engine.run_once(t=10.0)
+    scheduled = engine.latest_score("Machine:B")
+    assert scheduled.trigger == "scheduled" and scheduled.t == 10.0
+
+    engine.on_motif_completion(MotifCompletionEvent("lateral_pivot", "Machine:B", [], completed_at=20.0))
+    fast = engine.latest_score("Machine:B")
+    assert fast.trigger == "motif_completion" and fast.t == 20.0
+    assert engine.latest_score("Machine:A").t == 20.0  # a neighbor, rescored too
+
+    store.remove(a_b.edge_id)  # Machine:A is gone from the graph
+    engine.run_once(t=30.0)
+    assert engine.latest_score("Machine:A") is None
+    assert engine.latest_score("Machine:B").t == 30.0

@@ -24,7 +24,14 @@ for, not to be a production-accurate anomaly detector:
     subscriber (motif_engine.py) that scores only the completed motif's
     local neighborhood immediately, instead of waiting for the next
     scheduled pass -- design.md 2.8's "targeted/immediate inference" fast
-    path.
+    path. Since Backlog B.10 the forward pass itself runs on just that
+    neighborhood's k-hop incoming subgraph (`ActiveGraphStore.in_subgraph()`),
+    which gives the same scores as a full-graph pass at a fraction of the cost.
+
+Backlog B.10 also settled what NFR1's sub-millisecond target times: the
+per-entity score lookup (`TGNNInferenceEngine.latest_score()`) against the
+latest pass, not the passes themselves. Those get their own latency budgets
+in bench.py.
 
 Swapping in a production-trained architecture later means replacing
 `DynamicTGNN`'s layers, not touching how the engine sources its graph,
@@ -55,10 +62,11 @@ DEFAULT_HIDDEN_DIM = 16
 class EntityFeatureTable:
     """Stable node_id -> embedding-row registry.
 
-    `ActiveGraphStore.to_pyg_edge_index()` assigns each node a fresh
-    integer index, in first-encountered order, on *every* call -- perfectly
-    fine for building one forward pass's `edge_index`, but not a stable
-    identity across calls. This table is the layer that keeps a durable
+    `ActiveGraphStore.to_pyg_edge_index()`'s integer node indices are only
+    meaningful within one snapshot (they shift when other nodes are dropped,
+    and `in_subgraph()` uses its own local ones) -- perfectly fine for
+    building one forward pass's `edge_index`, but not a stable identity
+    across calls. This table is the layer that keeps a durable
     row per entity id across calls, the role a production T-GNN's entity
     id -> embedding lookup would play; it grows lazily as new entities are
     first seen.
@@ -98,6 +106,11 @@ class DynamicTGNN(torch.nn.Module):
     graph plus a linear anomaly-score head. See module docstring -- this
     architecture is intentionally minimal (specs.md §4 Non-Goals)."""
 
+    # Message-passing layers in forward(): a node's score depends on nodes
+    # up to this many hops upstream, so it sizes the fast path's subgraph.
+    # Keep it in step with forward() when swapping the architecture.
+    num_layers = 2
+
     def __init__(self, base_feature_dim: int = DEFAULT_BASE_FEATURE_DIM, hidden_dim: int = DEFAULT_HIDDEN_DIM) -> None:
         super().__init__()
         self.entity_features = EntityFeatureTable(base_feature_dim)
@@ -128,25 +141,31 @@ class DynamicTGNN(torch.nn.Module):
         `entity_ids`, if given, restricts the *returned* set to those ids
         (used by the motif fast-path, 5.3) -- an id not currently present
         as a node in the live store (e.g. already pruned) is silently
-        omitted rather than erroring.
+        omitted rather than erroring. Since B.10 the forward pass then runs
+        on only their `num_layers`-hop incoming subgraph
+        (`store.in_subgraph()`), which yields the same scores as a
+        full-graph pass for exactly those nodes.
         """
-        edge_index, _edge_ids, node_index = store.to_pyg_edge_index()
+        if entity_ids is None:
+            edge_index, _edge_ids, node_index = store.to_pyg_edge_index()
+        else:
+            edge_index, _edge_ids, node_index = store.in_subgraph(entity_ids, self.num_layers)
         if not node_index:
             return {}
 
-        ordered_ids = list(node_index.keys())
+        # Both graph sources keep dict order == index order, so this lines
+        # up row i of x with node index i.
+        ordered_ids = list(node_index)
         base = self.entity_features.rows_for(ordered_ids)
         deviation = torch.tensor(
             [deviation_features.get(n, 0.0) for n in ordered_ids], dtype=torch.float32
         ).unsqueeze(1)
         x = torch.cat([base, deviation], dim=1)
 
-        scores = self.forward(edge_index, x)
-        result = {node_id: scores[idx].item() for node_id, idx in node_index.items()}
-
-        if entity_ids is not None:
-            result = {n: result[n] for n in entity_ids if n in result}
-        return result
+        scores = self.forward(edge_index, x).tolist()
+        if entity_ids is None:
+            return dict(zip(ordered_ids, scores))
+        return {n: scores[node_index[n]] for n in entity_ids if n in node_index}
 
 
 @dataclass
@@ -193,6 +212,11 @@ class TGNNInferenceEngine:
         self.result_bus = result_bus or InferenceResultBus()
         self.poll_interval = poll_interval
         self._deviation_features: dict[str, float] = {}
+        # B.10: the latest result per entity, for latest_score(). A scheduled
+        # pass replaces it wholesale (it covers every live node, so a pruned
+        # entity drops out); a fast-path result overlays its few entities.
+        self._latest: dict[str, InferenceResult] = {}
+        self._latest_lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         if alert_bus is not None:
@@ -207,6 +231,15 @@ class TGNNInferenceEngine:
         if signal.z_score is not None:
             self._deviation_features[signal.entity] = signal.z_score
 
+    def latest_score(self, entity_id: str) -> Optional[InferenceResult]:
+        """The entity's most recent result -- from the last scheduled pass,
+        or a later fast-path one -- or None if it hasn't been scored or was
+        absent from the last scheduled pass (pruned). This per-entity lookup
+        is what NFR1's sub-millisecond target times (Backlog B.10); check
+        `t` and `trigger` for how fresh it is."""
+        with self._latest_lock:
+            return self._latest.get(entity_id)
+
     def run_once(self, t: float) -> list[InferenceResult]:
         """The scheduled inference pass (design.md 2.8's "periodically")
         over every node currently in the Active Graph Store."""
@@ -215,6 +248,9 @@ class TGNNInferenceEngine:
             InferenceResult(entity_id=node_id, score=score, t=t, trigger="scheduled")
             for node_id, score in scores.items()
         ]
+        latest = {result.entity_id: result for result in results}
+        with self._latest_lock:
+            self._latest = latest
         for result in results:
             self.result_bus.publish(result)
         return results
@@ -223,7 +259,8 @@ class TGNNInferenceEngine:
         """5.3: the fast-path trigger. Scores only the completed motif's
         local neighborhood immediately, rather than waiting for the next
         scheduled `run_once()` (design.md 2.8's "targeted/immediate
-        inference over the relevant local neighborhood")."""
+        inference over the relevant local neighborhood"). The forward pass
+        covers just that neighborhood's k-hop subgraph (B.10)."""
         targeted = self._neighborhood_for(event)
         scores = self.model.score_entities(self.store, self._deviation_features, entity_ids=targeted)
         results = [
@@ -233,6 +270,9 @@ class TGNNInferenceEngine:
             )
             for node_id, score in scores.items()
         ]
+        with self._latest_lock:
+            for result in results:
+                self._latest[result.entity_id] = result
         for result in results:
             self.result_bus.publish(result)
         return results
