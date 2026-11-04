@@ -48,6 +48,7 @@ from t_gnn.api.routers import (
     motifs,
     pilot,
     scores,
+    security,
     stream,
 )
 
@@ -98,6 +99,7 @@ def create_app() -> FastAPI:
     app.include_router(stream.router)
     app.include_router(pilot.router)
     app.include_router(entities.router)
+    app.include_router(security.router)
 
     return app
 

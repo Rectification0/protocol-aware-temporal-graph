@@ -1,41 +1,39 @@
-import type { PaginationState } from '@tanstack/react-table'
 import { ShieldAlert } from 'lucide-react'
 import { StatCard } from '@/components/stat-card'
 import {
-  computeSecurityLevel,
-  SECURITY_LEVEL_LABEL,
-  tileUnavailableMessage,
+  SECURITY_SCORE_BAND_LABEL,
+  SECURITY_SCORE_BAND_TONE,
+  securityScoreUnavailable,
 } from '@/features/dashboard/logic'
 import { StatusPill } from '@/features/dashboard/status-pill'
-import { useEntityScores, useMetricsSnapshot } from '@/hooks/api'
+import { useSecurityScore } from '@/hooks/api'
 
-const LEVEL_TONE = { normal: 'success', elevated: 'warning', critical: 'error' } as const
-
-// F6.2: overall security level, an interim proxy documented in
-// `logic.ts` -- combines `MetricsSnapshot.motif_hit_rate_per_second` with
-// the single highest-|score| entity currently on record.
-const TOP_SCORE_PAGE: PaginationState = { pageIndex: 0, pageSize: 1 }
-
+// F6.2: overall security level -- since F0.12, the cybersecurity score's
+// band (85+ Good, 65-84 Fair, 40-64 Poor, under 40 Critical), so this tile
+// and F6.1's number always agree. Shares F6.1's query, so it costs no
+// second request.
 export function SecurityLevelTile() {
-  const metrics = useMetricsSnapshot()
-  const topScore = useEntityScores(TOP_SCORE_PAGE)
-
-  const isLoading = metrics.isLoading || topScore.isLoading
-  const level = metrics.data
-    ? computeSecurityLevel(metrics.data, topScore.rows[0]?.score ?? null)
-    : null
+  const securityScore = useSecurityScore()
+  const band = securityScore.data?.band ?? null
 
   return (
     <StatCard
       label="Security Level"
       icon={ShieldAlert}
-      loading={isLoading}
+      loading={securityScore.isLoading}
       unavailable={
-        !isLoading && !level
-          ? tileUnavailableMessage(metrics.error, 'No metrics reported yet')
-          : undefined
+        securityScore.isLoading
+          ? undefined
+          : securityScoreUnavailable(securityScore.data, securityScore.error)
       }
-      value={level && <StatusPill tone={LEVEL_TONE[level]} label={SECURITY_LEVEL_LABEL[level]} />}
+      value={
+        band && (
+          <StatusPill
+            tone={SECURITY_SCORE_BAND_TONE[band]}
+            label={SECURITY_SCORE_BAND_LABEL[band]}
+          />
+        )
+      }
     />
   )
 }

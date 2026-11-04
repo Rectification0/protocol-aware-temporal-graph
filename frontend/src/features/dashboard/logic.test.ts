@@ -1,27 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import {
   computeMonitoringStatus,
-  computeSecurityLevel,
   computeThreatStatus,
+  formatPenalty,
   MONITORING_INACTIVE_AFTER_SECONDS,
   MONITORING_STALE_AFTER_SECONDS,
   SECURITY_LEVEL_THRESHOLDS,
+  securityScoreUnavailable,
   THREAT_STATUS_WINDOW_SECONDS,
   tileUnavailableMessage,
 } from '@/features/dashboard/logic'
-import type { MetricsSnapshotOut, MotifCompletionOut } from '@/types/api'
-
-function metrics(hitRatePerSecond: number): MetricsSnapshotOut {
-  return {
-    active_graph_size: 100,
-    prune_rate_per_second: 0,
-    epsilon: 0.1,
-    motif_hit_rate_per_second: hitRatePerSecond,
-    motif_reset_rate_per_second: 0,
-    latest_inference_latency_seconds: 0.01,
-    total_edges_processed: 0,
-  }
-}
+import { securityScoreFixture } from '@/test/securityScore'
+import type { MotifCompletionOut } from '@/types/api'
 
 function completion(completedAt: number): MotifCompletionOut {
   return {
@@ -34,38 +24,33 @@ function completion(completedAt: number): MotifCompletionOut {
   }
 }
 
-describe('computeSecurityLevel', () => {
-  it('is normal when both the hit rate and max score are quiet', () => {
-    expect(computeSecurityLevel(metrics(0), 0)).toBe('normal')
-    expect(computeSecurityLevel(metrics(0), null)).toBe('normal')
+describe('securityScoreUnavailable', () => {
+  it('is undefined when there is a score', () => {
+    expect(securityScoreUnavailable(securityScoreFixture(), null)).toBeUndefined()
   })
 
-  it('escalates on hit rate alone', () => {
-    expect(computeSecurityLevel(metrics(0.001), null)).toBe('elevated')
-    expect(
-      computeSecurityLevel(
-        metrics(SECURITY_LEVEL_THRESHOLDS.hitRatePerSecond.critical + 0.01),
-        null,
-      ),
-    ).toBe('critical')
+  it('uses the reason the backend gives when it withholds the score', () => {
+    const withheld = securityScoreFixture({ score: null, band: null, unavailable_reason: 'stale' })
+    expect(securityScoreUnavailable(withheld, null)).toBe('stale')
   })
 
-  it('escalates on score magnitude alone', () => {
-    expect(
-      computeSecurityLevel(metrics(0), SECURITY_LEVEL_THRESHOLDS.maxAbsScore.elevated + 1),
-    ).toBe('elevated')
-    expect(
-      computeSecurityLevel(metrics(0), SECURITY_LEVEL_THRESHOLDS.maxAbsScore.critical + 1),
-    ).toBe('critical')
+  it('falls back to the fetch error', () => {
+    expect(securityScoreUnavailable(undefined, new Error('boom'))).toBe('boom')
+    expect(securityScoreUnavailable(undefined, null)).toBe('Score unavailable')
   })
+})
 
-  it('takes the worse of the two signals', () => {
-    expect(
-      computeSecurityLevel(metrics(0), -(SECURITY_LEVEL_THRESHOLDS.maxAbsScore.critical + 1)),
-    ).toBe('critical')
-    expect(
-      computeSecurityLevel(metrics(SECURITY_LEVEL_THRESHOLDS.hitRatePerSecond.critical + 1), 0),
-    ).toBe('critical')
+describe('formatPenalty', () => {
+  it('shows at most one decimal and drops a trailing .0', () => {
+    expect(formatPenalty(15.74)).toBe('15.7')
+    expect(formatPenalty(5)).toBe('5')
+    expect(formatPenalty(0.04)).toBe('0')
+  })
+})
+
+describe('SECURITY_LEVEL_THRESHOLDS', () => {
+  it('keeps critical at 6, the anomaly threshold in security_score.py', () => {
+    expect(SECURITY_LEVEL_THRESHOLDS.maxAbsScore.critical).toBe(6)
   })
 })
 

@@ -55,6 +55,7 @@ export function AckButton({
             onSuccess: () => {
               markAcked(detectionType, detectionRef)
               void queryClient.invalidateQueries({ queryKey: queryKeys.alertResponseTime() })
+              void queryClient.invalidateQueries({ queryKey: queryKeys.securityScore() })
             },
           },
         )

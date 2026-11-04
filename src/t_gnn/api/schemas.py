@@ -226,3 +226,30 @@ class AlertAckOut(BaseModel):
 class AlertResponseTimeOut(BaseModel):
     average_seconds: Optional[float]
     sample_size: int
+
+
+class SecurityScoreComponentOut(BaseModel):
+    key: str
+    label: str
+    penalty: float
+    max_penalty: float
+    detail: str
+    provisional: bool
+    inputs: dict[str, float]
+
+
+class SecurityScoreOut(BaseModel):
+    """F0.12: mirrors `security_score.SecurityScore`. `score`/`band` are
+    null, with `unavailable_reason` set, when the pipeline isn't reporting;
+    `components` are filled in either way."""
+
+    score: Optional[float]
+    band: Optional[Literal["good", "fair", "poor", "critical"]]
+    unavailable_reason: Optional[str]
+    pipeline_status: Literal["active", "stale", "inactive"]
+    snapshot_age_seconds: Optional[float]
+    computed_at: float
+    window_seconds: float
+    formula_version: str
+    components: list[SecurityScoreComponentOut]
+    inputs_truncated: bool

@@ -45,6 +45,18 @@ export function mockAllEndpoints() {
   m.listMotifConfig.mockResolvedValue([])
   m.getEntityForensics.mockResolvedValue([])
   m.getAlertResponseTime.mockResolvedValue({ average_seconds: null, sample_size: 0 })
+  m.getSecurityScore.mockResolvedValue({
+    score: null,
+    band: null,
+    unavailable_reason: 'No metrics snapshot recorded yet',
+    pipeline_status: 'inactive',
+    snapshot_age_seconds: null,
+    computed_at: 0,
+    window_seconds: 86_400,
+    formula_version: '1',
+    components: [],
+    inputs_truncated: false,
+  })
   m.getPilotReport.mockRejectedValue(new Error('no pilot report'))
   m.getEntityScore.mockRejectedValue(new Error('not scored'))
   m.getPrunedEdge.mockRejectedValue(new Error('not found'))

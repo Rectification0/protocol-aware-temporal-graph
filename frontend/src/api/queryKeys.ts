@@ -43,4 +43,6 @@ export const queryKeys = {
     ['entities', params] as const,
   // F14.4: no params -- one aggregate over the most recent acknowledgements.
   alertResponseTime: () => ['alerts', 'response-time'] as const,
+  // F0.12: no params -- one score over the backend's fixed window.
+  securityScore: () => ['security', 'score'] as const,
 }

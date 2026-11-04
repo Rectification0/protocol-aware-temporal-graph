@@ -85,10 +85,13 @@ Recharts/Zustand.
 `src/pages/HomePage.tsx` is the first real page: a responsive grid of six
 `src/features/dashboard/` tiles, each an F5.3 `StatCard` fetching its own
 data via an F4.2 hook. `src/features/dashboard/logic.ts` has each tile's
-derivation as a pure, unit-tested function — the cybersecurity-score tile
-has none (it stays behind an empty-state until tasks.md F0.12 exists);
-security-level and active-monitoring both use documented-as-provisional
-threshold constants (an interim proxy until F0.12 lands); threat-status
+derivation as a pure, unit-tested function. The cybersecurity-score and
+security-level tiles show the backend's F0.12 score and its band
+(`useSecurityScore()`, `GET /api/security/score`), or the backend's own
+reason when it withholds the score because the pipeline isn't reporting;
+the Security Overview page breaks the score down
+(`features/security-overview/SecurityScoreBreakdown.tsx`). Active-monitoring
+uses documented-as-provisional threshold constants; threat-status
 and last-analysis both anchor "now" to their query's own `dataUpdatedAt`
 rather than a live `Date.now()` read during render, per the React
 Compiler's purity rule. `src/features/dashboard/status-pill.tsx` is a
@@ -102,9 +105,10 @@ system health).
 the second data-driven page, backed by a new `src/features/analytics/`
 folder following F6's same pure-logic-plus-components split.
 `logic.ts`'s score-magnitude tiers (`benign`/`suspicious`/`malicious`,
-F7.1/F7.3) deliberately reuse F6.2's exact interim-proxy thresholds under
-new names rather than a second set of unreviewed magic numbers — still
-provisional pending F0.12, and the UI itself (`UserThreatCountsPanel`'s
+F7.1/F7.3) deliberately reuse F6.2's score-magnitude thresholds
+(`SECURITY_LEVEL_THRESHOLDS.maxAbsScore`) under new names rather than a
+second set of unreviewed magic numbers — still provisional (the model is
+untrained), and the UI itself (`UserThreatCountsPanel`'s
 caption), not just code comments, says so. F7.2's trend chart and F7.4's
 live attack counter are documented in `logic.ts` as honest snapshot-in-
 time proxies, not true histories, given `entity_scores`'s

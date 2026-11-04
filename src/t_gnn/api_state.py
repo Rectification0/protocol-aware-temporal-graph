@@ -51,6 +51,13 @@ from t_gnn.motif_engine import (
     MotifResetEvent,
 )
 from t_gnn.feedback import MotifFeedbackBus, MotifFeedbackEvent
+from t_gnn.security_score import (
+    ANOMALY_SCORE_THRESHOLD,
+    MOTIF_DETECTION_TYPE,
+    Disposition,
+    ScoredDetection,
+    SecurityScoreInputs,
+)
 from t_gnn.tgnn import InferenceResult, InferenceResultBus
 
 logger = logging.getLogger(__name__)
@@ -780,3 +787,50 @@ class ApiStateReader:
         if not deltas:
             return AlertResponseTimeStats(average_seconds=None, sample_size=0)
         return AlertResponseTimeStats(average_seconds=sum(deltas) / len(deltas), sample_size=len(deltas))
+
+    def security_score_inputs(self, since: float, detection_limit: int = 5000) -> SecurityScoreInputs:
+        """F0.12: what `security_score.compute_security_score()` reads, for
+        the window starting at `since`, in one connection. Detections are
+        capped at the `detection_limit` most recent (the detection penalty
+        saturates long before that; `detections_truncated` says when the
+        cap was hit). Entities count only if their latest score falls in
+        the window, so an entity pruned days ago doesn't keep counting."""
+        with self._connection_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT max(captured_at) FROM metrics_snapshots")
+                captured_at = cur.fetchone()[0]
+                cur.execute(
+                    """
+                    SELECT motif_name, chain_key, completed_at, confidence FROM motif_completions
+                    WHERE completed_at >= %s ORDER BY completed_at DESC LIMIT %s
+                    """,
+                    (since, detection_limit + 1),
+                )
+                detection_rows = cur.fetchall()
+                cur.execute(
+                    "SELECT motif_name, chain_key, disposition, noted_at FROM motif_feedback WHERE noted_at >= %s",
+                    (since,),
+                )
+                disposition_rows = cur.fetchall()
+                cur.execute(
+                    """
+                    SELECT detection_ref FROM alert_acknowledgements
+                    WHERE detection_type = %s AND acknowledged_at >= %s
+                    """,
+                    (MOTIF_DETECTION_TYPE, since),
+                )
+                ack_rows = cur.fetchall()
+                cur.execute(
+                    "SELECT count(*), count(*) FILTER (WHERE abs(score) > %s) FROM entity_scores WHERE t >= %s",
+                    (ANOMALY_SCORE_THRESHOLD, since),
+                )
+                scored, anomalous = cur.fetchone()
+        return SecurityScoreInputs(
+            snapshot_captured_at=captured_at,
+            detections=[ScoredDetection(*row) for row in detection_rows[:detection_limit]],
+            dispositions=[Disposition(*row) for row in disposition_rows],
+            acknowledged_refs=[row[0] for row in ack_rows],
+            scored_entities=scored,
+            anomalous_entities=anomalous,
+            detections_truncated=len(detection_rows) > detection_limit,
+        )

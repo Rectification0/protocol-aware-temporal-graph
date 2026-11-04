@@ -205,3 +205,30 @@ export interface AlertResponseTimeOut {
   average_seconds: number | null
   sample_size: number
 }
+
+// F0.12: `security_score.py`'s company cybersecurity score.
+export type SecurityScoreBand = 'good' | 'fair' | 'poor' | 'critical'
+
+export interface SecurityScoreComponentOut {
+  key: string
+  label: string
+  penalty: number
+  max_penalty: number
+  detail: string
+  provisional: boolean
+  inputs: Record<string, number>
+}
+
+export interface SecurityScoreOut {
+  /** null, with `unavailable_reason` set, while the pipeline isn't reporting. */
+  score: number | null
+  band: SecurityScoreBand | null
+  unavailable_reason: string | null
+  pipeline_status: 'active' | 'stale' | 'inactive'
+  snapshot_age_seconds: number | null
+  computed_at: number
+  window_seconds: number
+  formula_version: string
+  components: SecurityScoreComponentOut[]
+  inputs_truncated: boolean
+}

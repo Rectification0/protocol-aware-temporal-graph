@@ -420,3 +420,45 @@ def test_config_change_round_trip_with_attribution():
         ("lateral_pivot", 14400, 7200, None),
         ("SMB", 0.000004, 0.00002, "alice"),
     ]
+
+
+def test_security_score_inputs_read_only_the_window():
+    """F0.12: the reader query behind /api/security/score."""
+    writer = ApiStateWriter(get_test_db_connection)
+    reader = ApiStateReader(get_test_db_connection)
+    now = time.time()
+    since = now - 3600
+    writer.record_metrics_snapshot(MetricsSnapshot(
+        active_graph_size=1, prune_rate_per_second=0.0, epsilon=None, motif_hit_rate_per_second=0.0,
+        motif_reset_rate_per_second=0.0, latest_inference_latency_seconds=None,
+    ), t=now - 5)
+    writer.record_motif_completion(MotifCompletionEvent("lateral_pivot", "Machine:C1", ["e1"], now - 60, confidence=0.8))
+    writer.record_motif_completion(MotifCompletionEvent("lateral_pivot", "Machine:C2", ["e2"], now - 7200))  # too old
+    writer.record_motif_feedback(MotifFeedbackEvent("lateral_pivot", "Machine:C1", "false_positive", now - 30))
+    writer.record_alert_acknowledgement("motif_completion", f"lateral_pivot:Machine:C1:{now - 60}", None, None, t=now - 20)
+    writer.record_alert_acknowledgement("anomaly", "User:a:1.0", None, None, t=now - 20)  # not a motif ack
+    writer.record_entity_score(InferenceResult("User:a", 9.5, now - 10, "scheduled"))
+    writer.record_entity_score(InferenceResult("User:b", -0.2, now - 10, "scheduled"))
+    writer.record_entity_score(InferenceResult("User:old", 50.0, now - 7200, "scheduled"))  # latest score too old
+
+    inputs = reader.security_score_inputs(since=since)
+
+    assert inputs.snapshot_captured_at == pytest.approx(now - 5)
+    assert [(d.chain_key, d.confidence) for d in inputs.detections] == [("Machine:C1", 0.8)]
+    assert [(d.chain_key, d.disposition) for d in inputs.dispositions] == [("Machine:C1", "false_positive")]
+    assert inputs.acknowledged_refs == [f"lateral_pivot:Machine:C1:{now - 60}"]
+    assert (inputs.scored_entities, inputs.anomalous_entities) == (2, 1)
+    assert not inputs.detections_truncated
+
+
+def test_security_score_inputs_report_truncation():
+    writer = ApiStateWriter(get_test_db_connection)
+    reader = ApiStateReader(get_test_db_connection)
+    now = time.time()
+    for i in range(3):
+        writer.record_motif_completion(MotifCompletionEvent("lateral_pivot", f"Machine:C{i}", [], now - i))
+
+    inputs = reader.security_score_inputs(since=now - 3600, detection_limit=2)
+
+    assert len(inputs.detections) == 2 and inputs.detections_truncated
+    assert inputs.snapshot_captured_at is None

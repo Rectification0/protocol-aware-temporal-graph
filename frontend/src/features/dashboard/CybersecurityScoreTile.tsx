@@ -1,17 +1,35 @@
-import { ShieldQuestion } from 'lucide-react'
+import { ShieldCheck } from 'lucide-react'
 import { StatCard } from '@/components/stat-card'
+import { securityScoreUnavailable } from '@/features/dashboard/logic'
+import { useSecurityScore } from '@/hooks/api'
 
-// F6.1: company cybersecurity score tile. F0.12 (the backend aggregate
-// formula) is a `[BACKEND TODO]` -- per this task's own instruction,
-// built behind `StatCard.unavailable` (F5.13's empty-state pattern)
-// rather than fabricating a number, and names the exact gap rather than
-// a generic "coming soon".
+// F6.1: the company cybersecurity score (F0.12), computed by the backend
+// from the last 24 h of detections, acknowledgements and entity scores.
+// When the pipeline isn't reporting the backend withholds the number and
+// says why; that reason is shown as-is rather than a stale or perfect score.
+// The Security Overview page breaks the number down (`SecurityScoreBreakdown`).
 export function CybersecurityScoreTile() {
+  const securityScore = useSecurityScore()
+  const score = securityScore.data?.score ?? null
+
   return (
     <StatCard
       label="Cybersecurity Score"
-      icon={ShieldQuestion}
-      unavailable="Not available yet -- depends on tasks.md F0.12 (the aggregate scoring formula hasn't been decided/built)."
+      icon={ShieldCheck}
+      loading={securityScore.isLoading}
+      unavailable={
+        securityScore.isLoading
+          ? undefined
+          : securityScoreUnavailable(securityScore.data, securityScore.error)
+      }
+      value={
+        score !== null ? (
+          <>
+            {Math.round(score)}
+            <span className="text-sm font-normal text-muted-foreground"> / 100</span>
+          </>
+        ) : undefined
+      }
     />
   )
 }

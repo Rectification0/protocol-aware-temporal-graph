@@ -31,6 +31,7 @@ from t_gnn.api_state import (
 from t_gnn.audit import FileAuditSink
 from t_gnn.forensics import PrunedEdgeRecord
 from t_gnn.metrics import MetricsSnapshot
+from t_gnn.security_score import Disposition, ScoredDetection, SecurityScoreInputs
 from t_gnn.tgnn import InferenceResult
 
 
@@ -42,6 +43,7 @@ class FakeApiState:
 
     def __init__(self):
         self.snapshot = None
+        self.snapshot_captured_at = None
         self.scores: list[InferenceResult] = []
         self.completions: list[MotifCompletionRecord] = []
         self.resets: list[MotifResetRecord] = []
@@ -110,6 +112,20 @@ class FakeApiState:
         if not deltas:
             return AlertResponseTimeStats(average_seconds=None, sample_size=0)
         return AlertResponseTimeStats(average_seconds=sum(deltas) / len(deltas), sample_size=len(deltas))
+
+    def security_score_inputs(self, since, detection_limit=5000):
+        recent = [s for s in self.scores if s.t >= since]
+        return SecurityScoreInputs(
+            snapshot_captured_at=self.snapshot_captured_at,
+            detections=[ScoredDetection(c.motif_name, c.chain_key, c.completed_at, c.confidence)
+                        for c in self.completions if c.completed_at >= since],
+            dispositions=[Disposition(f.motif_name, f.chain_key, f.disposition, f.noted_at)
+                          for f in self.feedback if f.noted_at >= since],
+            acknowledged_refs=[a.detection_ref for a in self.acks
+                               if a.detection_type == "motif_completion" and a.acknowledged_at >= since],
+            scored_entities=len(recent),
+            anomalous_entities=sum(1 for s in recent if abs(s.score) > 6.0),
+        )
 
     def record_motif_feedback(self, event):
         record = MotifFeedbackRecord(
@@ -663,3 +679,42 @@ def test_query_error_is_a_500_with_the_real_message_not_an_outage(client, fake_s
     assert message.startswith("Postgres query failed: UndefinedTable")
     assert 'relation "metrics_snapshots" does not exist' in message
     assert any(r.exc_info for r in caplog.records)  # traceback reaches the server log
+
+
+# --- F0.12: company cybersecurity score -------------------------------------------
+
+
+def test_security_score_is_withheld_until_the_pipeline_reports(client):
+    response = client.get("/api/security/score")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["score"] is None and body["band"] is None
+    assert body["pipeline_status"] == "inactive"
+    assert "hasn't reported" in body["unavailable_reason"]
+    assert [c["key"] for c in body["components"]] == ["detections", "response_backlog", "anomalous_entities"]
+
+
+def test_security_score_reflects_recent_detections_and_entities(client, fake_state):
+    now = time.time()
+    fake_state.snapshot_captured_at = now - 2
+    fake_state.completions.append(MotifCompletionRecord(
+        id=1, motif_name="lateral_pivot", chain_key="Machine:C1042", matched_edges=[], completed_at=now - 30,
+        confidence=1.0,
+    ))
+    fake_state.completions.append(MotifCompletionRecord(  # outside the 24 h window: ignored
+        id=2, motif_name="lateral_pivot", chain_key="Machine:C9", matched_edges=[], completed_at=now - 3 * 86400,
+        confidence=1.0,
+    ))
+    fake_state.scores = [InferenceResult(entity_id=f"User:u{i}", score=9.0 if i == 0 else 0.1, t=now - 10,
+                                         trigger="scheduled") for i in range(10)]
+
+    body = client.get("/api/security/score").json()
+
+    components = {c["key"]: c for c in body["components"]}
+    assert components["detections"]["inputs"]["detections"] == 1
+    assert components["anomalous_entities"]["inputs"]["anomalous_entities"] == 1
+    assert components["anomalous_entities"]["provisional"] is True
+    assert body["pipeline_status"] == "active" and body["formula_version"] == "1"
+    assert body["score"] == pytest.approx(100 - sum(c["penalty"] for c in body["components"]), abs=0.05)
+    assert body["band"] in ("good", "fair", "poor", "critical")

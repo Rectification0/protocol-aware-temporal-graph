@@ -13,6 +13,7 @@ export function endpointMockFactory() {
     getMetricsSnapshot: vi.fn(),
     getPilotReport: vi.fn(),
     getPrunedEdge: vi.fn(),
+    getSecurityScore: vi.fn(),
     listAuditLog: vi.fn(),
     listConfigChanges: vi.fn(),
     listEntities: vi.fn(),

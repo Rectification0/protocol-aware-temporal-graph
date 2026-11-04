@@ -20,6 +20,7 @@ import type {
   ProtocolConfigOut,
   ProtocolLambdaIn,
   PrunedEdgeOut,
+  SecurityScoreOut,
 } from '@/types/api'
 
 // F4.1: one typed function per F0 endpoint. Grouped by router to mirror
@@ -201,4 +202,9 @@ export function acknowledgeAlert(body: AlertAckIn) {
 // F14.4: average analyst-ack latency, over the most recent acknowledgements.
 export function getAlertResponseTime(signal?: AbortSignal) {
   return apiRequest<AlertResponseTimeOut>('/api/alerts/response-time', { signal })
+}
+
+// F0.12: the company cybersecurity score, computed on read.
+export function getSecurityScore(signal?: AbortSignal) {
+  return apiRequest<SecurityScoreOut>('/api/security/score', { signal })
 }

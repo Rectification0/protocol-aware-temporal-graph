@@ -24,6 +24,8 @@ export function useSubmitMotifFeedback() {
     mutationFn: (body: MotifFeedbackIn) => submitMotifFeedback(body),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['motifs', 'feedback'] })
+      // A false-positive disposition takes detections out of F0.12's score.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.securityScore() })
     },
   })
 }

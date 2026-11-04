@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
+import { securityScoreFixture } from '@/test/securityScore'
 import type { HealthOut, MetricsSnapshotOut, Paginated } from '@/types/api'
 
 vi.mock('@/api/endpoints', () => ({
@@ -9,9 +10,10 @@ vi.mock('@/api/endpoints', () => ({
   listEntityScores: vi.fn(),
   listMotifCompletions: vi.fn(),
   getHealth: vi.fn(),
+  getSecurityScore: vi.fn(),
 }))
 
-const { getHealth, getMetricsSnapshot, listEntityScores, listMotifCompletions } =
+const { getHealth, getMetricsSnapshot, getSecurityScore, listEntityScores, listMotifCompletions } =
   await import('@/api/endpoints')
 const { Component: HomePage } = await import('@/pages/HomePage')
 
@@ -52,6 +54,7 @@ describe('HomePage (Milestone F6 Executive Dashboard)', () => {
       total: null,
     } satisfies Paginated<never>)
     vi.mocked(getHealth).mockResolvedValue(health)
+    vi.mocked(getSecurityScore).mockResolvedValue(securityScoreFixture({ score: 91, band: 'good' }))
 
     render(<HomePage />, { wrapper })
 
@@ -63,7 +66,8 @@ describe('HomePage (Milestone F6 Executive Dashboard)', () => {
     expect(screen.getByText('Active Monitoring')).toBeInTheDocument()
     expect(screen.getByText('Last Analysis')).toBeInTheDocument()
 
-    expect(await screen.findByText('Normal')).toBeInTheDocument()
+    expect(await screen.findByText('91')).toBeInTheDocument()
+    expect(await screen.findByText('Good')).toBeInTheDocument()
     expect(await screen.findByText('Quiet')).toBeInTheDocument()
     expect(await screen.findByText('Healthy')).toBeInTheDocument()
     expect(await screen.findByText('Active')).toBeInTheDocument()

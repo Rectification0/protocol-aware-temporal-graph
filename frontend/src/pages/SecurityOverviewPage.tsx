@@ -7,6 +7,7 @@ import { SystemHealthTile } from '@/features/dashboard/SystemHealthTile'
 import { AverageResponseTimeTile } from '@/features/security-overview/AverageResponseTimeTile'
 import { MonitoredUsersTile } from '@/features/security-overview/MonitoredUsersTile'
 import { ProcessedLogsTile } from '@/features/security-overview/ProcessedLogsTile'
+import { SecurityScoreBreakdown } from '@/features/security-overview/SecurityScoreBreakdown'
 
 // Milestone F14 (Company Security Overview): tasks.md's own intro line
 // calls this "largely a second view over F6/F0.12's data at a different
@@ -36,6 +37,11 @@ export function Component() {
           </SectionErrorBoundary>
           <SectionErrorBoundary label="Security level">
             <SecurityLevelTile />
+          </SectionErrorBoundary>
+        </div>
+        <div className="mt-4">
+          <SectionErrorBoundary label="Score breakdown">
+            <SecurityScoreBreakdown />
           </SectionErrorBoundary>
         </div>
       </div>

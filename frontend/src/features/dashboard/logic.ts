@@ -1,68 +1,58 @@
 import { getErrorMessage } from '@/api/client'
-import type { MetricsSnapshotOut, MotifCompletionOut } from '@/types/api'
+import type { StatusTone } from '@/features/dashboard/status-pill'
+import type { MotifCompletionOut, SecurityScoreBand, SecurityScoreOut } from '@/types/api'
 
 // F6's executive-dashboard tiles. Pure/testable derivations live here;
 // the tile components (this folder) just wire a hook's result through
 // one of these and render the result via F5.3's `StatCard`.
 
-// --- F6.2: overall security level ---------------------------------------
+// --- F6.1/F6.2: company cybersecurity score (F0.12) --------------------
 //
-// F0.12 (a real, backend-computed aggregate score) doesn't exist yet
-// (tasks.md `[BACKEND TODO]`) -- this is the "simpler interim proxy"
-// tasks.md's own F6.2 line explicitly allows, using two signals that
-// already exist: `MetricsSnapshot.motif_hit_rate_per_second` (a real rate
-// of *full* structural pattern matches, FR3.4 -- not fabricated) and the
-// single highest-|score| entity currently on record. The entity-score
-// half leans on the same "relative magnitude is meaningful, absolute
-// value/sign is not" reading of the untrained reference model that
-// `score_entities.py` already establishes (specs.md §4) -- these
-// thresholds are illustrative constants, not a calibrated formula, and
-// should be revisited (or replaced outright) once F0.12 exists.
+// The score and its band come from the backend (`security_score.py`, GET
+// /api/security/score): the formula is defined there, once, so these tiles
+// only present it. F6.2's "security level" used to be an interim proxy
+// (thresholded motif hit rate and top entity |score|); since F0.12 it is
+// the score's band, so the two tiles can't disagree.
 
-export type SecurityLevel = 'normal' | 'elevated' | 'critical'
-
+/** |score| magnitudes for the untrained T-GNN's provisional tiers.
+ * `critical` is also `security_score.py`'s ANOMALY_SCORE_THRESHOLD (the
+ * score's anomalous-entity cutoff): keep the two in step. Reused by F7.1
+ * (`classifyEntityScore`) and F9 (anomaly-path severity). Illustrative,
+ * not calibrated (specs.md §4). */
 export const SECURITY_LEVEL_THRESHOLDS = {
-  hitRatePerSecond: { elevated: 0, critical: 0.05 },
   maxAbsScore: { elevated: 3, critical: 6 },
 } as const
 
-export const SECURITY_LEVEL_LABEL: Record<SecurityLevel, string> = {
-  normal: 'Normal',
-  elevated: 'Elevated',
+export const SECURITY_SCORE_BAND_LABEL: Record<SecurityScoreBand, string> = {
+  good: 'Good',
+  fair: 'Fair',
+  poor: 'Poor',
   critical: 'Critical',
 }
 
-function severityRank(level: SecurityLevel): number {
-  return { normal: 0, elevated: 1, critical: 2 }[level]
+export const SECURITY_SCORE_BAND_TONE: Record<SecurityScoreBand, StatusTone> = {
+  good: 'success',
+  fair: 'warning',
+  poor: 'error',
+  critical: 'error',
 }
 
-function levelFromHitRate(hitRatePerSecond: number): SecurityLevel {
-  const { elevated, critical } = SECURITY_LEVEL_THRESHOLDS.hitRatePerSecond
-  if (hitRatePerSecond > critical) return 'critical'
-  if (hitRatePerSecond > elevated) return 'elevated'
-  return 'normal'
+/** The tile's message when there's no score to show: the backend's own
+ * reason when it withheld the score (pipeline not reporting), else the
+ * fetch error. */
+export function securityScoreUnavailable(
+  data: SecurityScoreOut | undefined,
+  error: unknown,
+): string | undefined {
+  if (data)
+    return data.score === null ? (data.unavailable_reason ?? 'Score unavailable') : undefined
+  return tileUnavailableMessage(error, 'Score unavailable')
 }
 
-function levelFromScore(topScore: number | null): SecurityLevel {
-  if (topScore === null) return 'normal'
-  const { elevated, critical } = SECURITY_LEVEL_THRESHOLDS.maxAbsScore
-  const magnitude = Math.abs(topScore)
-  if (magnitude > critical) return 'critical'
-  if (magnitude > elevated) return 'elevated'
-  return 'normal'
-}
-
-/** `topScore` is the raw (possibly negative) `EntityScoreOut.score` of
- * whichever entity currently has the highest `abs(score)` -- the sign
- * carries no fixed meaning (specs.md §4), so this takes its magnitude
- * itself rather than requiring every call site to remember to. */
-export function computeSecurityLevel(
-  metrics: MetricsSnapshotOut,
-  topScore: number | null,
-): SecurityLevel {
-  const fromHitRate = levelFromHitRate(metrics.motif_hit_rate_per_second)
-  const fromScore = levelFromScore(topScore)
-  return severityRank(fromHitRate) >= severityRank(fromScore) ? fromHitRate : fromScore
+/** Penalty points as a whole-number-or-one-decimal string ("12.3", "0"). */
+export function formatPenalty(points: number): string {
+  const rounded = Math.round(points * 10) / 10
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1)
 }
 
 // --- F6.3: threat status (recent MotifCompletionEvent count) -----------
