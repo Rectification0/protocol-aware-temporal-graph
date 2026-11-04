@@ -40,11 +40,20 @@ def test_inference_report_times_lookup_against_nfr1_and_passes_against_their_bud
             assert row["within_budget"][path] == (row[path]["p99_ms"] < 5.0)
         assert 0 < row["fast_path_subgraph"]["nodes"] <= row["nodes"]
         assert row["fast_path_subgraph"]["edges"] <= row["edges"]
-        # the hub's whole incoming neighborhood is in the subgraph
-        assert row["hub_fast_path_subgraph"]["edges"] >= int(row["edges"] * bench.HUB_EDGE_SHARE)
     small, large = report["sizes"]
     assert small["within_budget"]["scheduled_pass"] == (small["scheduled_pass"]["p99_ms"] < 50.0)
     assert large["within_budget"]["scheduled_pass"] is None  # 300 edges > max_edges=100: not checked
+
+
+def test_hub_fast_path_is_sampled_down_to_the_fanout_cap():
+    """B.13: uncapped, the hub's whole incoming neighborhood is in the fast
+    path's subgraph; capped, the hub contributes at most the fan-out."""
+    capped = bench.bench_inference([2000], repeats=3, fast_path_fanout=10, log=lambda *_: None)
+    exact = bench.bench_inference([2000], repeats=3, fast_path_fanout=None, log=lambda *_: None)
+    assert capped["fast_path_fanout"] == 10 and exact["fast_path_fanout"] is None
+    hub_logons = int(2000 * bench.HUB_EDGE_SHARE)
+    assert exact["sizes"][0]["hub_fast_path_subgraph"]["edges"] >= hub_logons
+    assert capped["sizes"][0]["hub_fast_path_subgraph"]["edges"] < hub_logons
 
 
 def test_hub_heavy_edges_point_the_configured_share_at_the_hub():

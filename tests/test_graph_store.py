@@ -1,3 +1,4 @@
+import random
 import threading
 
 import torch
@@ -248,3 +249,60 @@ def test_in_subgraph_skips_targets_that_are_not_live_nodes():
     assert list(node_index) == ["User:alice"]  # a source-only node: in the graph, no incoming edges
     assert edge_ids == []
     assert store.in_subgraph(["Machine:ghost"], num_hops=2)[2] == {}
+
+
+# --- Backlog B.13: fan-out cap ------------------------------------------------------
+
+
+def _hub_store(n_logons=200):
+    """A hub with `n_logons` incoming edges, plus one low-degree machine
+    feeding it and one user feeding that machine (a second hop)."""
+    store = ActiveGraphStore()
+    hub_edges = [_edge(src=f"User:u{i}", dst="Machine:dc", t_e=float(i)) for i in range(n_logons)]
+    for edge in hub_edges:
+        store.upsert(edge)
+    store.upsert(_edge(src="Machine:jump", dst="Machine:dc", t_e=1e4))
+    store.upsert(_edge(src="User:admin", dst="Machine:jump", t_e=1e4 + 1))
+    return store, hub_edges
+
+
+def test_in_subgraph_samples_a_hub_down_to_max_fanout():
+    store, _ = _hub_store()
+
+    _, edge_ids, node_index = store.in_subgraph(["Machine:dc"], num_hops=2, max_fanout=10)
+
+    names = list(node_index)
+    into_dc = [eid for eid in edge_ids if store.get(eid).dst == "Machine:dc"]
+    assert len(into_dc) == 10  # 201 incoming, sampled to the cap
+    assert all(store.get(eid) is not None for eid in edge_ids)  # a sample of real edges, nothing invented
+    assert names[0] == "Machine:dc"
+    assert len(edge_ids) < len(store)
+
+
+def test_max_fanout_leaves_nodes_under_the_cap_exact():
+    store, _ = _hub_store(n_logons=5)
+
+    _, exact_ids, exact_nodes = store.in_subgraph(["Machine:dc"], num_hops=2)
+    _, capped_ids, capped_nodes = store.in_subgraph(["Machine:dc"], num_hops=2, max_fanout=10)
+
+    assert capped_ids == exact_ids and capped_nodes == exact_nodes
+
+
+def test_max_fanout_sample_is_repeatable_for_the_same_seed():
+    store, _ = _hub_store()
+
+    first = store.in_subgraph(["Machine:dc"], num_hops=2, max_fanout=10, seed=7)
+    second = store.in_subgraph(["Machine:dc"], num_hops=2, max_fanout=10, seed=7)
+    other = store.in_subgraph(["Machine:dc"], num_hops=2, max_fanout=10, seed=8)
+
+    assert first[1] == second[1]
+    assert set(other[1]) != set(first[1])
+
+
+def test_incoming_edges_limit_samples_without_replacement():
+    store, hub_edges = _hub_store()
+
+    sampled = store.incoming_edges("Machine:dc", limit=50, rng=random.Random(0))
+
+    assert len(sampled) == 50 and len({e.edge_id for e in sampled}) == 50
+    assert len(store.incoming_edges("Machine:dc")) == len(hub_edges) + 1  # no limit: all of them

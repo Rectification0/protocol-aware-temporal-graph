@@ -213,3 +213,17 @@ def test_sharded_to_pyg_edge_index_decodes_to_real_endpoints():
     for col, edge_id in enumerate(edge_ids):
         edge = sharded.get(edge_id)
         assert (names[edge_index[0, col]], names[edge_index[1, col]]) == (edge.src, edge.dst)
+
+
+def test_sharded_store_fanout_cap_samples_across_all_shards():
+    """B.13: the cap applies to a node's incoming edges over every shard
+    together, not per shard (which would let N shards return N x the cap)."""
+    edges = [_edge(f"User:u{i}", "Machine:dc", t_e=float(i)) for i in range(120)]
+    sharded = ShardedActiveGraphStore(num_shards=4)
+    for edge in edges:
+        sharded.upsert(edge)
+
+    _, edge_ids, _ = sharded.in_subgraph(["Machine:dc"], num_hops=2, max_fanout=10)
+
+    assert len(edge_ids) == 10
+    assert all(sharded.get(eid).dst == "Machine:dc" for eid in edge_ids)

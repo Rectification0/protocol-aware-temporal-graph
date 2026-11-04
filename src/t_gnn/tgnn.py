@@ -27,6 +27,10 @@ for, not to be a production-accurate anomaly detector:
     path. Since Backlog B.10 the forward pass itself runs on just that
     neighborhood's k-hop incoming subgraph (`ActiveGraphStore.in_subgraph()`),
     which gives the same scores as a full-graph pass at a fraction of the cost.
+    Backlog B.13 caps each node's incoming edges in that subgraph
+    (`fast_path_fanout`, sampled uniformly above it), so a motif next to a
+    hub stays cheap; scores that depend on a sampled hub are approximate
+    until the next scheduled pass.
 
 Backlog B.10 also settled what NFR1's sub-millisecond target times: the
 per-entity score lookup (`TGNNInferenceEngine.latest_score()`) against the
@@ -57,6 +61,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_FEATURE_DIM = 8
 DEFAULT_HIDDEN_DIM = 16
+# Backlog B.13: the fast path keeps at most this many incoming edges per node
+# (a uniform sample above it), so a motif pivoting through a hub costs about
+# the same as any other. PyG's usual first-hop `NeighborLoader` fan-out.
+DEFAULT_FAST_PATH_FANOUT = 25
 
 
 class EntityFeatureTable:
@@ -131,6 +139,7 @@ class DynamicTGNN(torch.nn.Module):
         store: ActiveGraphStore,
         deviation_features: dict[str, float],
         entity_ids: Optional[list[str]] = None,
+        max_fanout: Optional[int] = None,
     ) -> dict[str, float]:
         """5.1/5.2: the customized forward pass. Re-reads the store's
         *current* edge_index/node_index (dynamic edge dropping, 5.1),
@@ -144,12 +153,15 @@ class DynamicTGNN(torch.nn.Module):
         omitted rather than erroring. Since B.10 the forward pass then runs
         on only their `num_layers`-hop incoming subgraph
         (`store.in_subgraph()`), which yields the same scores as a
-        full-graph pass for exactly those nodes.
+        full-graph pass for exactly those nodes. `max_fanout` (B.13) caps
+        how many incoming edges per node that subgraph keeps, sampling the
+        rest away, which makes scores near a hub approximate; None (the
+        default here) keeps the subgraph exact.
         """
         if entity_ids is None:
             edge_index, _edge_ids, node_index = store.to_pyg_edge_index()
         else:
-            edge_index, _edge_ids, node_index = store.in_subgraph(entity_ids, self.num_layers)
+            edge_index, _edge_ids, node_index = store.in_subgraph(entity_ids, self.num_layers, max_fanout)
         if not node_index:
             return {}
 
@@ -206,11 +218,15 @@ class TGNNInferenceEngine:
         result_bus: Optional[InferenceResultBus] = None,
         alert_bus: Optional[MotifAlertBus] = None,
         poll_interval: float = 1.0,
+        fast_path_fanout: Optional[int] = DEFAULT_FAST_PATH_FANOUT,
     ) -> None:
         self.store = store
         self.model = model or DynamicTGNN()
         self.result_bus = result_bus or InferenceResultBus()
         self.poll_interval = poll_interval
+        # B.13: None makes the fast path exact again, at a cost that follows
+        # the largest incoming neighborhood it touches.
+        self.fast_path_fanout = fast_path_fanout
         self._deviation_features: dict[str, float] = {}
         # B.10: the latest result per entity, for latest_score(). A scheduled
         # pass replaces it wholesale (it covers every live node, so a pruned
@@ -260,9 +276,13 @@ class TGNNInferenceEngine:
         local neighborhood immediately, rather than waiting for the next
         scheduled `run_once()` (design.md 2.8's "targeted/immediate
         inference over the relevant local neighborhood"). The forward pass
-        covers just that neighborhood's k-hop subgraph (B.10)."""
+        covers just that neighborhood's k-hop subgraph (B.10), with hubs'
+        incoming edges sampled down to `fast_path_fanout` (B.13). The next
+        scheduled pass, which is always exact, replaces these scores."""
         targeted = self._neighborhood_for(event)
-        scores = self.model.score_entities(self.store, self._deviation_features, entity_ids=targeted)
+        scores = self.model.score_entities(
+            self.store, self._deviation_features, entity_ids=targeted, max_fanout=self.fast_path_fanout
+        )
         results = [
             InferenceResult(
                 entity_id=node_id, score=score, t=event.completed_at,

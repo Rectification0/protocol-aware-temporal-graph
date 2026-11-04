@@ -301,3 +301,73 @@ def test_latest_score_tracks_scheduled_and_fast_path_results():
     engine.run_once(t=30.0)
     assert engine.latest_score("Machine:A") is None
     assert engine.latest_score("Machine:B").t == 30.0
+
+
+# --- Backlog B.13: the fast path's fan-out cap ------------------------------------------
+
+
+def _hub_graph(n_logons=300):
+    store = ActiveGraphStore()
+    for i in range(n_logons):
+        store.upsert(_edge(f"User:u{i}", "Machine:dc", t_e=float(i)))
+    store.upsert(_edge("User:alice", "Machine:dc", t_e=1e4))
+    store.upsert(_edge("Machine:jump", "User:alice", protocol="RDP", t_e=1e4 + 1))
+    return store
+
+
+def _forward_sizes(model):
+    sizes = []
+    real_forward = model.forward
+
+    def spy(edge_index, x):
+        sizes.append(edge_index.shape[1])
+        return real_forward(edge_index, x)
+
+    model.forward = spy
+    return sizes
+
+
+def test_engine_fast_path_caps_a_hubs_incoming_edges():
+    store = _hub_graph()
+    engine = TGNNInferenceEngine(store=store, fast_path_fanout=20)
+    sizes = _forward_sizes(engine.model)
+
+    results = engine.on_motif_completion(MotifCompletionEvent("lateral_pivot", "User:alice", [], completed_at=5.0))
+
+    # alice's neighborhood is {alice, dc, jump}: dc's 301 logons sample down
+    # to 20, alice's one incoming edge and jump's none stay as they are.
+    assert sizes == [21]
+    assert {r.entity_id for r in results} == {"User:alice", "Machine:dc", "Machine:jump"}
+
+
+def test_engine_fast_path_without_a_cap_is_exact_on_a_hub():
+    store = _hub_graph()
+    model = DynamicTGNN()
+    full = model.score_entities(store, {})
+    engine = TGNNInferenceEngine(store=store, model=model, fast_path_fanout=None)
+
+    results = engine.on_motif_completion(MotifCompletionEvent("lateral_pivot", "User:alice", [], completed_at=5.0))
+
+    for result in results:
+        assert abs(result.score - full[result.entity_id]) < 1e-5
+
+
+def test_fast_path_cap_only_changes_scores_that_depend_on_a_sampled_hub():
+    store = _hub_graph()
+    model = DynamicTGNN()
+    full = model.score_entities(store, {})
+
+    capped = model.score_entities(store, {}, entity_ids=["User:alice", "Machine:dc"], max_fanout=20)
+
+    assert abs(capped["User:alice"] - full["User:alice"]) < 1e-5  # alice's own 2-hop inputs: under the cap
+    assert torch.isfinite(torch.tensor(capped["Machine:dc"]))  # dc's: an estimate from 20 of its 301 logons
+
+
+def test_scheduled_pass_ignores_the_fast_path_cap():
+    store = _hub_graph()
+    engine = TGNNInferenceEngine(store=store, fast_path_fanout=5)
+    sizes = _forward_sizes(engine.model)
+
+    engine.run_once(t=1.0)
+
+    assert sizes == [len(store)]

@@ -9,7 +9,8 @@ proxies in tests/test_load.py (where `store.get()` stood in for inference):
   (`TGNNInferenceEngine.latest_score()`). The passes have their own budgets
   (`PASS_BUDGETS_MS`): `run_once()` (the scheduled pass, budgeted up to
   `--max-edges`) and `on_motif_completion()` (the 5.3 fast path, on a k-hop
-  subgraph, budgeted at every size and also timed on a hub-heavy graph),
+  subgraph, budgeted at every size and also timed on a hub-heavy graph,
+  with B.13's per-node fan-out cap; `--fast-path-fanout 0` times it uncapped),
   timed on graphs of increasing size, with the scheduled pass split into the
   PyG `edge_index` snapshot and the forward pass itself.
 - `ingest` -- NFR2, in-process: edges/second through the per-edge pipeline
@@ -49,7 +50,7 @@ from t_gnn.motifs import MotifRegistry
 from t_gnn.pruning import EpsilonController, PruningWatcher
 from t_gnn.schema import Edge
 from t_gnn.streaming import DecayStreamProcessor
-from t_gnn.tgnn import TGNNInferenceEngine
+from t_gnn.tgnn import DEFAULT_FAST_PATH_FANOUT, TGNNInferenceEngine
 
 NFR1_LATENCY_SECONDS = 0.001  # B.10: applies to the per-entity score lookup
 # B.10's pass budgets (p99), agreed with the developer 2026-10-27. The
@@ -123,28 +124,35 @@ def _time(fn: Callable[[], object], repeats: int) -> list[float]:
     return out
 
 
-def _hub_fast_path(n_edges: int, n_repeats: int, seed: int) -> tuple[dict, dict]:
+def _fast_path_subgraph(engine: TGNNInferenceEngine, event: MotifCompletionEvent) -> tuple[list[str], dict[str, int]]:
+    _, sub_edge_ids, sub_nodes = engine.store.in_subgraph(
+        engine._neighborhood_for(event), engine.model.num_layers, engine.fast_path_fanout
+    )
+    return sub_edge_ids, sub_nodes
+
+
+def _hub_fast_path(n_edges: int, n_repeats: int, seed: int, fanout: Optional[int]) -> tuple[dict, dict]:
     """The fast path for a motif pivoting on a user who logs on to the hub."""
     store = ActiveGraphStore()
     edges = hub_heavy_edges(n_edges, seed=seed)
     for edge in edges:
         store.upsert(edge)
-    engine = TGNNInferenceEngine(store=store)
+    engine = TGNNInferenceEngine(store=store, fast_path_fanout=fanout)
     chain_key = next(e.src for e in edges if e.dst == HUB_NODE)
     event = MotifCompletionEvent(motif_name="bench", chain_key=chain_key, matched_edges=[], completed_at=0.0)
-    _, sub_edge_ids, sub_nodes = store.in_subgraph(engine._neighborhood_for(event), engine.model.num_layers)
+    sub_edge_ids, sub_nodes = _fast_path_subgraph(engine, event)
     timing = _summary(_time(lambda: engine.on_motif_completion(event), n_repeats))
     return timing, {"edges": len(sub_edge_ids), "nodes": len(sub_nodes)}
 
 
 def bench_inference(sizes: list[int], repeats: int = 20, seed: int = 0, max_edges: int = DEFAULT_BUDGET_MAX_EDGES,
-                    log=print) -> dict:
+                    fast_path_fanout: Optional[int] = DEFAULT_FAST_PATH_FANOUT, log=print) -> dict:
     results = []
     for n_edges in sizes:
         store = ActiveGraphStore()
         for edge in synthetic_edges(n_edges, seed=seed):
             store.upsert(edge)
-        engine = TGNNInferenceEngine(store=store)
+        engine = TGNNInferenceEngine(store=store, fast_path_fanout=fast_path_fanout)
         n_repeats = max(3, repeats if n_edges < 100_000 else repeats // 4)
 
         edge_index, _, node_index = store.to_pyg_edge_index()
@@ -152,7 +160,7 @@ def bench_inference(sizes: list[int], repeats: int = 20, seed: int = 0, max_edge
         x = torch.cat([engine.model.entity_features.rows_for(ordered), torch.zeros(len(ordered), 1)], dim=1)
         chain_key = next(n for n in ordered if n.startswith("User:"))
         event = MotifCompletionEvent(motif_name="bench", chain_key=chain_key, matched_edges=[], completed_at=0.0)
-        _, sub_edge_ids, sub_nodes = store.in_subgraph(engine._neighborhood_for(event), engine.model.num_layers)
+        sub_edge_ids, sub_nodes = _fast_path_subgraph(engine, event)
 
         rng = random.Random(seed)
         lookups = [rng.choice(ordered) for _ in range(1000)]
@@ -168,7 +176,7 @@ def bench_inference(sizes: list[int], repeats: int = 20, seed: int = 0, max_edge
             "materialize_edge_index": _summary(_time(store.to_pyg_edge_index, n_repeats)),
             "forward_only": _summary(_time(lambda: engine.model.forward(edge_index, x), n_repeats)),
         }
-        row["hub_fast_path"], row["hub_fast_path_subgraph"] = _hub_fast_path(n_edges, n_repeats, seed)
+        row["hub_fast_path"], row["hub_fast_path_subgraph"] = _hub_fast_path(n_edges, n_repeats, seed, fast_path_fanout)
         fast_budget, scheduled_budget = PASS_BUDGETS_MS["fast_path"], PASS_BUDGETS_MS["scheduled_pass"]
         row["meets_nfr1"] = row["score_lookup"]["p99_ms"] < NFR1_LATENCY_SECONDS * 1000
         row["within_budget"] = {
@@ -184,7 +192,8 @@ def bench_inference(sizes: list[int], repeats: int = 20, seed: int = 0, max_edge
             f"hub fast path p99 {row['hub_fast_path']['p99_ms']:6.2f}ms ({row['hub_fast_path_subgraph']['edges']} edges) | "
             f"snapshot p50 {row['materialize_edge_index']['p50_ms']:7.2f}ms forward p50 {row['forward_only']['p50_ms']:7.2f}ms")
     return {"nfr1_target_ms": NFR1_LATENCY_SECONDS * 1000, "nfr1_measures": "score_lookup",
-            "pass_budgets_ms": PASS_BUDGETS_MS, "budget_max_edges": max_edges, "sizes": results}
+            "pass_budgets_ms": PASS_BUDGETS_MS, "budget_max_edges": max_edges, "fast_path_fanout": fast_path_fanout,
+            "sizes": results}
 
 
 def bench_ingest(n_edges: int = 100_000, prune_every: int = 1000, seed: int = 0, log=print) -> dict:
@@ -348,6 +357,8 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument("--sizes", default="100,1000,10000,50000,100000", help="inference: graph sizes in edges")
     parser.add_argument("--max-edges", type=int, default=DEFAULT_BUDGET_MAX_EDGES,
                         help="inference: the deployment's max_edges; the scheduled-pass budget is checked up to it")
+    parser.add_argument("--fast-path-fanout", type=int, default=DEFAULT_FAST_PATH_FANOUT,
+                        help="inference: the fast path's per-node incoming-edge cap (Backlog B.13); 0 = uncapped, exact")
     parser.add_argument("--repeats", type=int, default=20, help="inference: timed runs per size")
     parser.add_argument("--edges", type=int, default=100_000, help="ingest: edges to push through")
     parser.add_argument("--prune-every", type=int, default=1000, help="ingest: edges between pruning passes")
@@ -363,7 +374,8 @@ def main(argv: Optional[list[str]] = None) -> None:
     report = {"machine": machine_info()}
     if args.command in ("inference", "all"):
         report["nfr1_inference"] = bench_inference([int(s) for s in args.sizes.split(",")], args.repeats, args.seed,
-                                                   max_edges=args.max_edges)
+                                                   max_edges=args.max_edges,
+                                                   fast_path_fanout=args.fast_path_fanout or None)
     if args.command in ("ingest", "all"):
         report["nfr2_ingest_in_process"] = bench_ingest(args.edges, args.prune_every, args.seed)
     if args.command in ("flink", "all"):

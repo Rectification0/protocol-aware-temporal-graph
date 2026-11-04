@@ -102,7 +102,7 @@ from t_gnn.protocol_registry import ProtocolDecayRegistry  # noqa: E402
 from t_gnn.pruning import EpsilonController, PruneEventBus, PruningWatcher  # noqa: E402
 from t_gnn.schema import Edge  # noqa: E402
 from t_gnn.streaming import DecayStreamProcessor  # noqa: E402
-from t_gnn.tgnn import TGNNInferenceEngine  # noqa: E402
+from t_gnn.tgnn import DEFAULT_FAST_PATH_FANOUT, TGNNInferenceEngine  # noqa: E402
 
 BACKGROUND_PROTOCOLS = ("Kerberos", "SMB", "RDP")
 BACKGROUND_PROTOCOL_WEIGHTS = (0.6, 0.3, 0.1)
@@ -249,6 +249,8 @@ def main() -> None:
     parser.add_argument("--epsilon-min", type=float, default=0.05)
     parser.add_argument("--epsilon-max", type=float, default=0.4)
     parser.add_argument("--max-edges", type=int, default=5000, help="graph-size ceiling feeding EpsilonController's size pressure")
+    parser.add_argument("--fast-path-fanout", type=int, default=DEFAULT_FAST_PATH_FANOUT,
+                        help="max incoming edges per node in the motif fast path's subgraph, sampled above it (Backlog B.13); 0 = uncapped, exact")
     parser.add_argument("--fuzzy", action="store_true", help="enable MotifEngine's fuzzy/probabilistic matching mode (Backlog B.4)")
     parser.add_argument("--min-confidence", type=float, default=0.5, help="only used with --fuzzy")
     parser.add_argument("--shards", type=int, default=1, help="use N shards for the graph store + motif cache (Backlog B.5); N=1 is the plain Phase 2/3 path")
@@ -365,7 +367,7 @@ def main() -> None:
         cold_storage=buffered_writer, event_bus=prune_bus, backpressure_probe=backpressure_probe,
     )
 
-    inference_engine = TGNNInferenceEngine(store=store, alert_bus=alert_bus)
+    inference_engine = TGNNInferenceEngine(store=store, alert_bus=alert_bus, fast_path_fanout=args.fast_path_fanout or None)
 
     metrics = MetricsCollector(store=store, prune_bus=prune_bus, alert_bus=alert_bus, reset_bus=reset_bus)
     audit_logger = AuditLogger(sink=FileAuditSink(args.audit_log), prune_bus=prune_bus, reset_bus=reset_bus)

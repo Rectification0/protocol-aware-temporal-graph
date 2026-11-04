@@ -29,6 +29,7 @@ on a slow prune cycle.
 
 from __future__ import annotations
 
+import random
 import threading
 from array import array
 from collections import defaultdict
@@ -46,11 +47,21 @@ def _empty_graph() -> PygGraph:
     return torch.empty((2, 0), dtype=torch.long), [], {}
 
 
+def _sample(items: list, limit: Optional[int], rng: Optional[random.Random]) -> list:
+    """`items` itself when within `limit`, else `limit` of them uniformly at
+    random (Backlog B.13's fan-out cap)."""
+    if limit is None or len(items) <= limit:
+        return items
+    return (rng or random).sample(items, limit)
+
+
 def build_in_subgraph(
     targets: Iterable[str],
     num_hops: int,
     has_node: Callable[[str], bool],
-    incoming_edges: Callable[[str], list[Edge]],
+    incoming_edges: Callable[..., list[Edge]],
+    max_fanout: Optional[int] = None,
+    seed: int = 0,
 ) -> PygGraph:
     """The `num_hops`-hop *incoming* neighborhood of `targets`, as a small
     PyG graph with its own local node indices (Backlog B.10).
@@ -63,7 +74,16 @@ def build_in_subgraph(
     scores as one over the whole graph, at a cost set by the neighborhood
     rather than the graph. Targets that aren't live nodes are skipped. In
     the returned node_index, dict order is index order, targets first.
+
+    Backlog B.13: with `max_fanout`, a node with more incoming edges than
+    that (a hub, such as a domain controller everyone logs on to) keeps a
+    uniform random sample of `max_fanout` of them, as PyG's `NeighborLoader`
+    does. `SAGEConv`'s mean aggregation then sees an unbiased estimate of
+    the hub's neighborhood instead of all of it, so scores that depend on a
+    sampled hub are approximate; nothing else changes. The sample is drawn
+    from `random.Random(seed)`, fresh per call.
     """
+    rng = random.Random(seed) if max_fanout is not None else None
     node_index: dict[str, int] = {}
     frontier: list[str] = []
     for node_id in targets:
@@ -77,7 +97,7 @@ def build_in_subgraph(
     for _ in range(num_hops):
         next_frontier: list[str] = []
         for node_id in frontier:
-            for edge in incoming_edges(node_id):
+            for edge in incoming_edges(node_id, max_fanout, rng):
                 if edge.src not in node_index:
                     node_index[edge.src] = len(node_index)
                     next_frontier.append(edge.src)
@@ -214,10 +234,17 @@ class ActiveGraphStore:
         with self._lock:
             return node_id in self._node_slot
 
-    def incoming_edges(self, node_id: str) -> list[Edge]:
-        """Active edges whose dst is `node_id`."""
+    def incoming_edges(
+        self, node_id: str, limit: Optional[int] = None, rng: Optional[random.Random] = None
+    ) -> list[Edge]:
+        """Active edges whose dst is `node_id`. With `limit`, a uniform
+        random sample of at most that many (B.13), drawn by id so a hub's
+        unsampled edges are never materialized."""
         with self._lock:
-            return [self._edges[eid] for eid in self._incoming.get(node_id, ())]
+            edge_ids = self._incoming.get(node_id, ())
+            if limit is not None and len(edge_ids) > limit:
+                edge_ids = _sample(list(edge_ids), limit, rng)
+            return [self._edges[eid] for eid in edge_ids]
 
     def neighbors(self, node_id: str, direction: str = "out") -> list[str]:
         """Node ids reachable from `node_id` via active edges.
@@ -265,12 +292,15 @@ class ActiveGraphStore:
             node_index = dict(zip(self._node_ids, range(len(self._node_ids))))
         return edge_index, edge_ids, node_index
 
-    def in_subgraph(self, targets: Iterable[str], num_hops: int) -> PygGraph:
+    def in_subgraph(
+        self, targets: Iterable[str], num_hops: int, max_fanout: Optional[int] = None, seed: int = 0
+    ) -> PygGraph:
         """The k-hop incoming neighborhood of `targets` (B.10's motif fast
-        path) -- see `build_in_subgraph()`. One consistent snapshot: the
-        store's lock is held for the whole walk."""
+        path), with B.13's optional per-node fan-out cap -- see
+        `build_in_subgraph()`. One consistent snapshot: the store's lock is
+        held for the whole walk."""
         with self._lock:
-            return build_in_subgraph(targets, num_hops, self.has_node, self.incoming_edges)
+            return build_in_subgraph(targets, num_hops, self.has_node, self.incoming_edges, max_fanout, seed)
 
 
 class ShardedActiveGraphStore:
@@ -336,11 +366,15 @@ class ShardedActiveGraphStore:
     def has_node(self, node_id: str) -> bool:
         return any(shard.has_node(node_id) for shard in self.shards)
 
-    def incoming_edges(self, node_id: str) -> list[Edge]:
+    def incoming_edges(
+        self, node_id: str, limit: Optional[int] = None, rng: Optional[random.Random] = None
+    ) -> list[Edge]:
+        """Gathers every shard's edges before sampling, so a `limit` sample
+        is uniform over the union rather than per shard."""
         result: list[Edge] = []
         for shard in self.shards:
             result.extend(shard.incoming_edges(node_id))
-        return result
+        return _sample(result, limit, rng)
 
     def to_pyg_edge_index(self) -> PygGraph:
         """Merges every shard's live edges into one combined edge_index --
@@ -364,8 +398,10 @@ class ShardedActiveGraphStore:
             return _empty_graph()
         return torch.cat(parts, dim=1), edge_ids, node_index
 
-    def in_subgraph(self, targets: Iterable[str], num_hops: int) -> PygGraph:
+    def in_subgraph(
+        self, targets: Iterable[str], num_hops: int, max_fanout: Optional[int] = None, seed: int = 0
+    ) -> PygGraph:
         """Scatter-gather version of `ActiveGraphStore.in_subgraph()`. Unlike
         the single store it isn't one atomic snapshot: each shard is read
         separately, so concurrent writes can land between hops."""
-        return build_in_subgraph(targets, num_hops, self.has_node, self.incoming_edges)
+        return build_in_subgraph(targets, num_hops, self.has_node, self.incoming_edges, max_fanout, seed)

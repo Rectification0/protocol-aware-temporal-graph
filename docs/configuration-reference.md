@@ -272,7 +272,7 @@ publish `config/protocols.yaml` on start.
 | Parameter | Default | Meaning |
 |---|---|---|
 | `DynamicTGNN(base_feature_dim, hidden_dim)` | 8, 16 | Per-entity embedding width and hidden layer width of the two `SAGEConv` layers |
-| `TGNNInferenceEngine(store, model, result_bus, alert_bus, poll_interval)` | — , `DynamicTGNN()`, `InferenceResultBus()`, `None`, 1.0s | `alert_bus`, if given, auto-subscribes `on_motif_completion` as the fast-path trigger (5.3); `poll_interval` controls the background scheduled-inference loop's cadence |
+| `TGNNInferenceEngine(store, model, result_bus, alert_bus, poll_interval, fast_path_fanout)` | — , `DynamicTGNN()`, `InferenceResultBus()`, `None`, 1.0s, 25 | `alert_bus`, if given, auto-subscribes `on_motif_completion` as the fast-path trigger (5.3); `poll_interval` controls the background scheduled-inference loop's cadence; `fast_path_fanout` (Backlog B.13) caps how many incoming edges per node the fast path's subgraph keeps, sampling uniformly above it, so a motif next to a hub stays within the 5 ms fast-path budget. Scores that depend on a sampled node are approximate until the next (always exact) scheduled pass; `None` makes the fast path exact, at a cost that grows with the largest incoming neighborhood it touches |
 
 Per specs.md §4's non-goal, this model's architecture is intentionally
 minimal (untrained/randomly initialized) — these parameters tune the

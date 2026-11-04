@@ -1,7 +1,8 @@
-# NFR1/NFR2 benchmarks (Backlog B.7, B.10)
+# NFR1/NFR2 benchmarks (Backlog B.7, B.10, B.13)
 
-Measured with `python -m t_gnn.bench` on 2026-10-23 (B.7) and again on
-2026-10-27 after Backlog B.10's inference rework. These are real
+Measured with `python -m t_gnn.bench` on 2026-10-23 (B.7), again on
+2026-10-27 after Backlog B.10's inference rework, and on 2026-11-04 for
+B.13's fast-path fan-out cap. These are real
 measurements of the real code paths, which the earlier proxy tests in
 `tests/test_load.py` were not: those timed `store.get()` as a stand-in for
 inference. They come from one developer machine, synthetic traffic and an
@@ -38,7 +39,7 @@ numbers before and after.
 | NFR1, per-entity score lookup | < 1 ms | p99 ≤ 1.4 µs at every size | **Met** |
 | Scheduled inference pass | ≤ 50 ms p99 up to `max_edges` (B.10 budget; 50k in the benchmark) | p99 17 ms at 50k edges (19 ms at 100k, above the cap) | **Within budget** |
 | Motif fast path (5.3), ordinary traffic | ≤ 5 ms p99 at any size (B.10 budget) | p99 1.1–2.7 ms, flat from 1k to 100k edges | **Within budget** |
-| Motif fast path (5.3), through a hub | ≤ 5 ms p99 at any size (B.10 budget) | p99 2.1 ms at 10k edges, 8.4 ms at 50k, 18.7 ms at 100k | **Missed** at 50k and above. Needs a subgraph cap (Backlog B.13) |
+| Motif fast path (5.3), through a hub | ≤ 5 ms p99 at any size (B.10 budget) | Uncapped (B.10): 12.6 ms p99 at 50k, 17.2 ms at 100k. With B.13's fan-out cap: ≤ 2.0 ms at every size | **Within budget** since B.13 (2026-11-04); scores near a sampled hub are approximate until the next scheduled pass |
 | NFR2, in-process pipeline | ≥ 1 B events/day | 11,600 edges/s ≈ 1.0 B/day on 2026-10-23; ~24,000 edges/s ≈ 2.1 B/day on 2026-10-27 (same machine, less loaded, B.10 code) | **Borderline to met**, and only with no Redis, Neo4j or inference in the loop |
 | NFR2, Flink job | ≥ 1 B events/day, bounded queue | B.7: ~600 edges/s (~52 M/day). B.11: 1,600/s sustained (~138 M/day), saturating ~2,000–2,270/s | **Not met**: about 14% of the floor |
 
@@ -121,7 +122,8 @@ p50 / p99, with the fast path's subgraph size):
   sampling a hub's incoming edges, or falling back to the latest scheduled
   score when the subgraph is too big. Either one changes scores slightly
   for hub-adjacent entities, so it's tracked as its own decision
-  (Backlog B.13), not folded into B.10.
+  (Backlog B.13), not folded into B.10. **B.13 (2026-11-04) chose sampling;
+  see [below](#b13-fast-path-fan-out-cap-2026-11-04).**
 - **Cost on ingest:** the incremental bookkeeping makes `upsert` slower.
   Three back-to-back runs of `bench ingest` averaged ~24,100 edges/s with
   B.10 against ~26,300 without, a 5–10% drop (the runs vary by ±1,500/s).
@@ -130,6 +132,56 @@ p50 / p99, with the fast path's subgraph size):
 The score lookup is in-process. The dashboard's own lookup
 (`GET /api/scores/entities/{id}`) goes through Postgres in the separate API
 process, so this number doesn't cover it.
+
+## B.13: fast-path fan-out cap (2026-11-04)
+
+B.10 left the hub case over budget: a motif next to a hub pulls the hub's
+whole incoming neighborhood into the fast path's subgraph. The two options
+were to sample a hub's incoming edges, or to skip the rescore and fall back
+to the latest scheduled scores when the subgraph gets too big. B.13 samples.
+The fallback would drop the immediate rescore (design.md 2.8) for exactly
+the motifs that pivot through a domain controller, which are the ones an
+analyst most needs scored now.
+
+How it works: `ActiveGraphStore.in_subgraph(..., max_fanout=k)` keeps at most
+`k` incoming edges per node, a uniform random sample above that, as PyG's
+`NeighborLoader` does. Sampling happens on edge ids, so a hub's unsampled
+edges are never materialized. `SAGEConv` averages over incoming neighbors,
+so a sampled hub's aggregate is an unbiased estimate of the full one.
+`TGNNInferenceEngine(fast_path_fanout=25)` applies the cap to the fast path
+only (`run_pipeline.py --fast-path-fanout`, `0` for exact). The scheduled
+pass is unchanged and exact, and it replaces the fast path's scores on its
+next run, about a second later by default.
+
+What it changes: a node with more than `k` incoming edges contributes a
+sample, so scores that depend on it within two hops are approximate. A node
+under the cap, and everything that depends only on such nodes, scores
+exactly as before (`tests/test_tgnn.py` checks both). The sample is seeded,
+so the same graph state gives the same sample in one process.
+
+Choosing `k`, on the same machine: 25 keeps clear headroom; 100 kept
+ordinary traffic exact (its machines have ~50 logons each) but put the hub
+case at 3–4.5 ms p99 under load, too close to 5 ms. With 25, ordinary
+machines above 25 logons are sampled too. That is the price of the margin.
+
+Capped (25) against uncapped, back to back on an idle machine (p50 / p99,
+with the subgraph's edge count):
+
+| Edges | Fast path, uncapped → capped | Hub fast path, uncapped → capped |
+|---:|---:|---:|
+| 100 | 0.46 / 0.96 → 0.46 / 0.81 ms (100 → 100) | 0.39 / 0.65 → 0.47 / 1.14 ms (100 → 100) |
+| 1,000 | 0.66 / 1.70 → 0.82 / 1.81 ms (641 → 325) | 0.88 / 1.60 → 0.83 / 1.96 ms (767 → 350) |
+| 10,000 | 1.11 / 1.33 → 0.94 / 1.06 ms (1,149 → 550) | 1.50 / 1.62 → 0.87 / 1.10 ms (2,047 → 525) |
+| 50,000 | 1.10 / 1.28 → 0.85 / 1.10 ms (727 → 375) | 9.48 / **12.64** → 1.00 / 1.41 ms (6,058 → 550) |
+| 100,000 | 1.52 / 2.06 → 1.45 / 1.56 ms (908 → 450) | 14.93 / **17.19** → 1.68 / 1.87 ms (10,935 → 475) |
+
+The hub fast path now costs the same as any other, about 500 edges of
+subgraph whatever the hub's size. Below 1k edges the cap makes no
+difference worth reading: those timings are within noise. The scheduled
+pass in the same runs stayed within budget (11 ms p99 at 50k, 13 ms at
+100k). An untrained model can't say how much sampling costs in detection
+quality; that belongs with Phase 9, whose training should sample the same
+way so the model learns on the inputs it will score.
 
 ## B.11: Flink throughput (2026-10-27)
 
@@ -319,8 +371,8 @@ duplicates across the sweep.
   implementation of the decay logic.
 - **Inference**: after B.10, the scheduled pass's remaining cost is the
   forward pass and per-node result handling. Batching `InferenceResult`
-  publishing would cut the second. The fast path needs a subgraph-size cap
-  to hold its budget around hubs (B.13).
+  publishing would cut the second. The fast path holds its budget around
+  hubs since B.13's fan-out cap.
 - **Real validation** (what B.7 actually asks for): enterprise-scale
   traffic on production-class infrastructure. That is the same acquisition
   gap tasks 0.4 and 7.3 document, and nothing in this repo can close it.
